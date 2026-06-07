@@ -26,6 +26,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # node-gyp 9 (used by @electron/rebuild when compiling native modules — e.g. node-pty
+      # for the cross-arch x64 build) imports the stdlib `distutils`, which Python 3.12
+      # removed (PEP 632). macos-14 runners default to 3.12, so pin 3.11 which still has it.
+      - name: Set up Python 3.11 (node-gyp needs distutils)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
