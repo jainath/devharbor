@@ -129,7 +129,7 @@ app.whenReady().then(() => {
       version: app.getVersion(),
       copyright: 'Copyright © 2026 Jainath Ponnala',
       credits: 'A harbor for your local dev servers. Licensed under GNU AGPL-3.0.',
-      website: 'https://devharbor.app'
+      website: 'https://www.devharbor.app'
     });
   }
 

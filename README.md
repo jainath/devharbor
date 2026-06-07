@@ -8,7 +8,7 @@
 
 Think of it like a "Postman for your local dev servers." Everything stays local — no accounts, no cloud, no telemetry.
 
-Website: [devharbor.app](https://devharbor.app)
+Website: [www.devharbor.app](https://www.devharbor.app)
 
 ## Install
 

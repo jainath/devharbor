@@ -2,7 +2,7 @@ import { Menu, shell, type BrowserWindow, type MenuItemConstructorOptions } from
 import type { EventChannelName } from '@shared/ipc';
 
 const APP_NAME = 'DevHarbor';
-const WEBSITE = 'https://devharbor.app';
+const WEBSITE = 'https://www.devharbor.app';
 
 /**
  * Install the application menu.

@@ -5,7 +5,7 @@
   "description": "DevHarbor — a harbor for your local dev servers. Desktop app for managing local Node.js projects on macOS.",
   "author": "Jainath Ponnala",
   "license": "AGPL-3.0-only",
-  "homepage": "https://devharbor.app",
+  "homepage": "https://www.devharbor.app",
   "repository": {
     "type": "git",
     "url": "https://github.com/jainath/devharbor.git"
