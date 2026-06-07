@@ -1,0 +1,37 @@
+.cmdk-root {
+  outline: none;
+}
+
+.cmdk-group {
+  padding: 0.25rem 0;
+}
+
+.cmdk-group [cmdk-group-heading] {
+  padding: 0.25rem 0.75rem;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgb(var(--fg-subtle));
+}
+
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 13px;
+  color: rgb(var(--fg) / 0.85);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cmdk-item[data-selected='true'] {
+  background-color: rgb(var(--bg-elevated));
+  color: rgb(var(--fg));
+}
+
+.cmdk-item kbd {
+  font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+}

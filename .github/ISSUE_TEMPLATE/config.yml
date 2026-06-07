@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/jainath/devharbor/discussions
+    about: Ask questions and share ideas in Discussions.
+  - name: Security report (private)
+    url: https://github.com/jainath/devharbor/security/advisories/new
+    about: Please report security issues privately, not as public issues.

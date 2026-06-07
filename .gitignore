@@ -1,0 +1,40 @@
+# Dependencies
+node_modules
+
+# Build output
+out
+dist
+.vite
+*.tsbuildinfo
+
+# Packaged app artifacts (also land in dist/, listed here as belt-and-suspenders)
+*.dmg
+*.zip
+*.blockmap
+*.app
+
+# Test / coverage / cache
+coverage
+.turbo
+.eslintcache
+
+# Logs
+*.log
+
+# Environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Local tool artifacts
+.understand-anything/
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Stray electron-vite root output (canonical build goes to out/)
+/index.js

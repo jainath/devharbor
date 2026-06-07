@@ -1,0 +1,72 @@
+name: Release
+
+# Cuts a release whenever a v* tag is pushed.
+#
+# Secrets required in the repo (Settings → Secrets and variables → Actions):
+#   MAC_CERTIFICATE_P12          base64 of your Developer ID .p12 (see specs/06-release.md)
+#   MAC_CERTIFICATE_PASSWORD     password used when exporting the .p12
+#   APPLE_ID                     your Apple developer email
+#   APPLE_APP_SPECIFIC_PASSWORD  an app-specific password generated at appleid.apple.com
+#   APPLE_TEAM_ID                10-char Team ID from developer.apple.com
+#   GITHUB_TOKEN                 auto-provided by Actions, but electron-builder reads it
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write    # so electron-builder can create the GitHub Release
+
+jobs:
+  build-mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Import code-signing cert
+        # Decodes MAC_CERTIFICATE_P12 to a file on the runner; electron-builder picks it
+        # up via CSC_LINK + CSC_KEY_PASSWORD.
+        run: |
+          echo "${MAC_CERTIFICATE_P12}" | base64 -d > "${RUNNER_TEMP}/cert.p12"
+          echo "CSC_LINK=${RUNNER_TEMP}/cert.p12" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=${MAC_CERTIFICATE_PASSWORD}" >> "$GITHUB_ENV"
+        env:
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+
+      - name: Build, sign, notarize, publish
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # --arm64 --x64 → two native per-arch builds. Apple Silicon users download the
+        # ~103MB arm64 DMG; Intel users the x64 DMG. electron-builder writes a single
+        # latest-mac.yml listing both zips, and electron-updater fetches the slice that
+        # matches the running machine. Smaller downloads than a combined universal binary.
+        run: pnpm exec electron-vite build && pnpm exec electron-builder --mac --arm64 --x64 --publish always
+
+      - name: Upload artifacts (as backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmg
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/latest-mac.yml

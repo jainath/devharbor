@@ -1,0 +1,89 @@
+{
+  "name": "devharbor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DevHarbor — a harbor for your local dev servers. Desktop app for managing local Node.js projects on macOS.",
+  "author": "Jainath Ponnala",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://devharbor.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jainath/devharbor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jainath/devharbor/issues"
+  },
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "pnpm typecheck:node && pnpm typecheck:web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "rebuild": "electron-rebuild -f -w better-sqlite3,@homebridge/node-pty-prebuilt-multiarch",
+    "postinstall": "electron-rebuild -f -w better-sqlite3,@homebridge/node-pty-prebuilt-multiarch",
+    "pack:mac": "electron-vite build && electron-builder --mac --arm64",
+    "pack:mac:release": "electron-vite build && electron-builder --mac --arm64 --x64",
+    "pack:mac:universal": "electron-vite build && electron-builder --mac --universal"
+  },
+  "comments": {
+    "dependencies": "ONLY main-process / native modules that electron-vite externalizes belong here — electron-builder ships every production dependency into the asar as raw node_modules. Renderer-only libs (react, lucide-react, xterm, etc.) are bundled into out/renderer by Vite, so they live in devDependencies to avoid being shipped twice (lucide-react alone is 3,500+ files)."
+  },
+  "dependencies": {
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
+    "better-sqlite3": "^11.5.0",
+    "chokidar": "^5.0.0",
+    "electron-updater": "^6.8.3",
+    "package-manager-detector": "^1.6.0",
+    "pidusage": "^4.0.1",
+    "semver": "^7.8.1",
+    "tree-kill": "^1.2.2",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@electron/notarize": "^3.1.1",
+    "@electron/rebuild": "^3.7.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.9.0",
+    "@types/pidusage": "^2.0.5",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/react-window": "^2.0.0",
+    "@types/semver": "^7.7.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "anser": "^2.3.5",
+    "autoprefixer": "^10.4.20",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "lucide-react": "^0.460.0",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-window": "^2.2.7",
+    "tailwind-merge": "^2.5.4",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.9",
+    "zustand": "^5.0.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@homebridge/node-pty-prebuilt-multiarch",
+      "better-sqlite3",
+      "electron",
+      "esbuild"
+    ]
+  }
+}

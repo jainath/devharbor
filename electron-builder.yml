@@ -1,0 +1,85 @@
+appId: app.devharbor.desktop
+productName: DevHarbor
+copyright: Copyright © 2026 Jainath Ponnala
+
+directories:
+  buildResources: build
+  output: dist
+
+# Files included in the asar archive. Source + dev config are excluded; everything
+# else under the project root is in (modulo node_modules, which electron-builder
+# prunes to production deps automatically).
+files:
+  - "!**/.vscode/*"
+  - "!src/*"
+  - "!specs/*"
+  - "!.github/*"
+  - "!electron.vite.config.{js,ts,mjs,cjs}"
+  - "!postcss.config.{js,cjs}"
+  - "!tailwind.config.{js,ts}"
+  - "!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,tsconfig.web.tsbuildinfo,tsconfig.node.tsbuildinfo}"
+  - "!{.eslintrc.cjs,.prettierignore,.prettierrc.yaml,CHANGELOG.md,README.md,LICENSE}"
+  - "!{.env,.env.*,.npmrc,pnpm-lock.yaml,.nvmrc,.gitignore}"
+
+asar: true
+
+# Native modules MUST be unpacked from asar — they can't be loaded from inside a
+# packed archive. electron-builder usually detects these automatically; we list
+# them explicitly for safety and clarity.
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
+  - "**/node_modules/pidusage/**"
+  - "resources/**"
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  # Arch is driven by the CLI flag, NOT hardcoded here:
+  #   pnpm pack:mac            → --arm64        (fast local dev build, Apple Silicon)
+  #   pnpm pack:mac:release    → --arm64 --x64  (per-arch release artifacts)
+  #   pnpm pack:mac:universal  → --universal    (Intel + Apple Silicon in one fat binary)
+  #   release.yml              → --arm64 --x64 --publish always
+  # Per-arch keeps each download small (~103MB arm64 vs ~183MB universal); electron-updater
+  # reads the single latest-mac.yml and pulls the slice matching the running machine.
+  target:
+    - dmg
+    - zip
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # macOS asks us to declare a protocol so the Info.plist registers devharbor://.
+  extendInfo:
+    NSHumanReadableCopyright: Copyright © 2026 Jainath Ponnala
+    LSMinimumSystemVersion: "11.0"
+    NSAppleEventsUsageDescription: DevHarbor spawns local dev processes on your behalf.
+    CFBundleURLTypes:
+      - CFBundleURLName: DevHarbor Deep Link
+        CFBundleURLSchemes:
+          - devharbor
+
+# Notarization: electron-builder reads APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
+# APPLE_TEAM_ID env vars at build time. If they're set, the .app is automatically
+# notarized + stapled after signing. If unset, the build skips notarization with a
+# warning — fine for local unsigned dev builds.
+afterSign: build/notarize.cjs
+
+dmg:
+  artifactName: ${name}-${version}-${arch}.dmg
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# GitHub Releases as the auto-update feed. electron-updater bakes app-update.yml at
+# build time from this block, so the packaged app already knows where to fetch updates.
+publish:
+  provider: github
+  owner: jainath
+  repo: devharbor
+  # Releases are public so signed-out users can fetch updates.
+  releaseType: release
