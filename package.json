@@ -1,6 +1,6 @@
 {
   "name": "devharbor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "DevHarbor — a harbor for your local dev servers. Desktop app for managing local Node.js projects on macOS.",
   "author": "Jainath Ponnala",

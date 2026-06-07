@@ -6,6 +6,11 @@ All notable changes to DevHarbor are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-06-07
+
+### Changed
+- Canonical website domain is now **www.devharbor.app** (About panel, Help menu, repo homepage).
+
 ## [1.0.0] — 2026-06-07
 
 First public stable release: code-signed, notarized, and auto-updating.
@@ -45,6 +50,7 @@ First public preview. macOS-only (Apple Silicon).
 - Dashboard control room, folder organization, and a ⌘K command palette.
 - Local-only storage (SQLite). No accounts, no telemetry.
 
-[Unreleased]: https://github.com/jainath/devharbor/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/jainath/devharbor/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/jainath/devharbor/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jainath/devharbor/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/jainath/devharbor/releases/tag/v0.1.0
