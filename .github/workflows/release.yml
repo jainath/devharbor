@@ -24,21 +24,37 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      # node-gyp 9 (used by @electron/rebuild when compiling native modules — e.g. node-pty
+      # Guard (tag pushes only): a release must be cut from a v* tag whose number matches
+      # package.json. Manual workflow_dispatch runs skip the guard but build with
+      # --publish never (see the build step) - a safe dry-run for testing the pipeline.
+      - name: Guard - tag matches package.json version
+        if: github.event_name == 'push'
+        run: |
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "::error::Releases must be cut from a v* tag (got ${GITHUB_REF})."; exit 1
+          fi
+          VERSION=$(grep -m1 '"version"' package.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${VERSION}" != "${TAG}" ]; then
+            echo "::error::package.json version (${VERSION}) does not match tag (${TAG})."; exit 1
+          fi
+          echo "Releasing v${VERSION} from tag ${GITHUB_REF_NAME}."
+
+      # node-gyp 9 (used by @electron/rebuild when compiling native modules - e.g. node-pty
       # for the cross-arch x64 build) imports the stdlib `distutils`, which Python 3.12
       # removed (PEP 632). macos-14 runners default to 3.12, so pin 3.11 which still has it.
       - name: Set up Python 3.11 (node-gyp needs distutils)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -67,11 +83,13 @@ jobs:
         # ~103MB arm64 DMG; Intel users the x64 DMG. electron-builder writes a single
         # latest-mac.yml listing both zips, and electron-updater fetches the slice that
         # matches the running machine. Smaller downloads than a combined universal binary.
-        run: pnpm exec electron-vite build && pnpm exec electron-builder --mac --arm64 --x64 --publish always
+        # Tag pushes publish; manual dispatch runs are dry-runs (build + sign only, artifacts
+        # uploaded by the next step) so the pipeline can be exercised without touching releases.
+        run: pnpm exec electron-vite build && pnpm exec electron-builder --mac --arm64 --x64 --publish ${{ github.event_name == 'push' && 'always' || 'never' }}
 
       - name: Upload artifacts (as backup)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: mac-dmg
           path: |

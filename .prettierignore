@@ -1,0 +1,15 @@
+# Generated / machine-managed
+pnpm-lock.yaml
+dist/
+out/
+node_modules/
+*.tsbuildinfo
+
+# Hand-formatted corpora a blanket `pnpm format` must not churn:
+# specs are the project's source-of-truth documents; the workflows are the signed
+# release pipeline; CHANGELOG follows keep-a-changelog conventions.
+specs/
+.github/
+CHANGELOG.md
+README.md
+electron-builder.yml

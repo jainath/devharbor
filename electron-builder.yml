@@ -18,12 +18,12 @@ files:
   - "!postcss.config.{js,cjs}"
   - "!tailwind.config.{js,ts}"
   - "!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,tsconfig.web.tsbuildinfo,tsconfig.node.tsbuildinfo}"
-  - "!{.eslintrc.cjs,.prettierignore,.prettierrc.yaml,CHANGELOG.md,README.md,LICENSE}"
+  - "!{eslint.config.mjs,.prettierrc.json,.prettierignore,vitest.config.ts,CHANGELOG.md,README.md,LICENSE}"
   - "!{.env,.env.*,.npmrc,pnpm-lock.yaml,.nvmrc,.gitignore}"
 
 asar: true
 
-# Native modules MUST be unpacked from asar — they can't be loaded from inside a
+# Native modules MUST be unpacked from asar - they can't be loaded from inside a
 # packed archive. electron-builder usually detects these automatically; we list
 # them explicitly for safety and clarity.
 asarUnpack:
@@ -59,14 +59,20 @@ mac:
         CFBundleURLSchemes:
           - devharbor
 
+# Harden Electron fuses on the packaged binary BEFORE signing (afterPack runs pre-sign), so
+# the flips are covered by the code signature. See build/fuses.cjs.
+afterPack: build/fuses.cjs
+
 # Notarization: electron-builder reads APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
 # APPLE_TEAM_ID env vars at build time. If they're set, the .app is automatically
 # notarized + stapled after signing. If unset, the build skips notarization with a
-# warning — fine for local unsigned dev builds.
+# warning - fine for local unsigned dev builds.
 afterSign: build/notarize.cjs
 
 dmg:
-  artifactName: ${name}-${version}-${arch}.dmg
+  # ${productName} (DevHarbor) - matches the zip naming so the user-facing dmg isn't the odd
+  # lowercase one out (IMPROVEMENT-PLAN 13.5).
+  artifactName: ${productName}-${version}-${arch}.dmg
   contents:
     - x: 130
       y: 220
