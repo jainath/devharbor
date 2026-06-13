@@ -1,4 +1,4 @@
-# 06 — Release (macOS)
+# 06 - Release (macOS)
 
 How to ship a signed, notarized, auto-updating DMG.
 
@@ -8,14 +8,14 @@ This document is the prerequisite list and runbook for actually shipping. Most o
 
 ### Apple side
 
-1. **Apple Developer account** — $99 USD/year. https://developer.apple.com/
-2. **Developer ID Application certificate** — Xcode → Settings → Accounts → "Manage Certificates" → `+` → **Developer ID Application**. Export from Keychain Access as a `.p12` with a strong password.
-3. **App-specific password** for notarization — sign in to https://appleid.apple.com → "Sign-In and Security" → "App-Specific Passwords" → generate one. Save it.
-4. **Team ID** — at https://developer.apple.com/account → Membership Details (10-char alphanumeric).
+1. **Apple Developer account** - $99 USD/year. https://developer.apple.com/
+2. **Developer ID Application certificate** - Xcode → Settings → Accounts → "Manage Certificates" → `+` → **Developer ID Application**. Export from Keychain Access as a `.p12` with a strong password.
+3. **App-specific password** for notarization - sign in to https://appleid.apple.com → "Sign-In and Security" → "App-Specific Passwords" → generate one. Save it.
+4. **Team ID** - at https://developer.apple.com/account → Membership Details (10-char alphanumeric).
 
 ### GitHub side
 
-5. **A public repo** at `github.com/<owner>/<repo>` matching the `publish` block of [electron-builder.yml](../electron-builder.yml). (Currently `jainath/devharbor` — change it there if needed.)
+5. **A public repo** at `github.com/<owner>/<repo>` matching the `publish` block of [electron-builder.yml](../electron-builder.yml). (Currently `jainath/devharbor` - change it there if needed.)
 6. **GitHub Actions enabled** for that repo.
 7. **GitHub Secrets**, set under *Settings → Secrets and variables → Actions*:
 
@@ -72,7 +72,7 @@ export CSC_KEY_PASSWORD="your-export-password"
 pnpm pack:mac
 ```
 
-Notarization stapling takes 2–15 minutes; you'll see the `[notarize] done.` line when it's complete. Verify:
+Notarization stapling takes 2-15 minutes; you'll see the `[notarize] done.` line when it's complete. Verify:
 
 ```bash
 spctl --assess --verbose dist/mac/App\ Manager.app
@@ -109,7 +109,7 @@ The yaml file (`latest-mac.yml`) and the artifacts (`.dmg`, `.zip`, the `.blockm
 | "App is damaged and can't be opened" | Unsigned/unnotarized download | Either right-click → Open, or finish notarization |
 | Notarization fails with `Invalid credentials` | App-specific password not set, or set on the wrong Apple ID | Regenerate at appleid.apple.com, update the secret |
 | `electron-updater` logs `404 latest-mac.yml` | The Release isn't published (or repo `publish` config is wrong) | Check the release exists in GitHub and the owner/repo in `electron-builder.yml` |
-| Auto-update silently does nothing in dev | Expected — `Skip checkForUpdates because application is not packed` | Test updates against a packaged DMG, not `pnpm dev` |
+| Auto-update silently does nothing in dev | Expected - `Skip checkForUpdates because application is not packed` | Test updates against a packaged DMG, not `pnpm dev` |
 | `NODE_MODULE_VERSION` mismatch on launch | Native deps rebuilt against wrong ABI | `pnpm rebuild` runs `electron-rebuild` for better-sqlite3 + node-pty |
 | `ModuleNotFoundError: No module named 'distutils'` during pack | Python 3.12 removed `distutils` from stdlib; bundled node-gyp 9.x still imports it | `python3 -m pip install --user --break-system-packages setuptools` (or use a venv with setuptools installed) |
 | `cannot find valid "Developer ID Application" identity` | No signing certificate in the Keychain (local unsigned build) | Expected for local dev; ship with cert in CI per the secrets table above |

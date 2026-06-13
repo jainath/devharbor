@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to DevHarbor! Keep PRs focused — one logical change each. -->
+<!-- Thanks for contributing to DevHarbor! Keep PRs focused - one logical change each. -->
 
 ## What & why
 
@@ -8,8 +8,8 @@
 
 - [ ] `pnpm typecheck` passes
 - [ ] `pnpm test` passes
-- [ ] Verified in the running app (`pnpm dev`) — if this touches UI or behaviour
-- [ ] Updated the relevant `specs/` file + `specs/PROGRESS.md` — if behaviour changed
+- [ ] Verified in the running app (`pnpm dev`) - if this touches UI or behaviour
+- [ ] Updated the relevant `specs/` file + `specs/PROGRESS.md` - if behaviour changed
 
 ## Notes
 

@@ -1,4 +1,4 @@
-# 01 — Architecture
+# 01 - Architecture
 
 ## Tech stack
 
@@ -9,7 +9,7 @@
 | Packaging | electron-builder | Mature signing/notarization/DMG/auto-update. Pairs cleanly with electron-vite. |
 | UI | React 18 + TypeScript | Default. |
 | Styling | Tailwind CSS | Dense, dev-tool aesthetic; pairs with shadcn. |
-| Components | shadcn/ui (on Radix) | We own the source — easy to make dense + customise. |
+| Components | shadcn/ui (on Radix) | We own the source - easy to make dense + customise. |
 | Renderer state | Zustand | Tiny, no Provider gymnastics, scales for this app size. |
 | IPC types | Shared `types/ipc.ts` + `electron-trpc` (deferred) | Start hand-rolled with strict types; revisit trpc if churn is high. |
 | Process spawn | `@lydell/node-pty` (prebuilt for Electron) | Real TTY → ANSI colors and TUI redraws work. No `electron-rebuild` pain. |
@@ -172,7 +172,7 @@ The preload re-exports an `api` object whose methods are 1:1 with these channel 
 
 A single SQLite file at `~/Library/Application Support/devharbor/devharbor.db` (resolved via `app.getPath('userData')`). Schema in [`02-data-model.md`](02-data-model.md). Migrations live in `src/main/db/migrations/` and run in order on startup.
 
-Logs are **not** persisted to SQLite by default — they live in the ring buffer. Optional per-app "save logs to disk" writes a rotating file to `userData/logs/<appId>/<runId>.log`.
+Logs are **not** persisted to SQLite by default - they live in the ring buffer. Optional per-app "save logs to disk" writes a rotating file to `userData/logs/<appId>/<runId>.log`.
 
 ## How we run a child process (the canonical sequence)
 
@@ -181,7 +181,7 @@ Logs are **not** persisted to SQLite by default — they live in the ring buffer
    1. Look up `App` row, including resolved Node version, package manager, working dir, script.
    2. `NodeResolver.resolveBinPath(app.nodeVersion)` → absolute path like `/Users/.../.nvm/versions/node/v20.11.0/bin`.
    3. Build the env:
-      - Start from a clean object (NOT inheriting full `process.env` — too leaky).
+      - Start from a clean object (NOT inheriting full `process.env` - too leaky).
       - Inject a sanitized base: `HOME`, `USER`, `LANG`, `TMPDIR`, `SHELL`, `TERM=xterm-256color`.
       - Prepend the resolved Node bin dir to `PATH`, then the user's standard `PATH` from a one-time login-shell probe.
       - Layer in global env vars from `EnvStore`.
@@ -202,11 +202,11 @@ Logs are **not** persisted to SQLite by default — they live in the ring buffer
 
 ## Failure & recovery
 
-- App quits while children are running → on next boot, scan the DB for "was running" flags; we can't reattach to PTYs but we can show the user "these apps were running last time — restart?"
+- App quits while children are running → on next boot, scan the DB for "was running" flags; we can't reattach to PTYs but we can show the user "these apps were running last time - restart?"
 - PTY native module fails to load → fall back to plain `child_process.spawn` with `FORCE_COLOR=1`. UI shows a warning banner.
 - SQLite corruption → on open failure, back up the file to `*.corrupt.<ts>` and create a fresh DB. Surface a one-time toast.
 - Node version requested but not installed → block start; show "Install v20.11.0 with nvm" with a copy-to-clipboard command. Do not auto-install.
 
 ## Auto-update
 
-`electron-updater` configured against a GitHub releases feed (or S3 later). Code signing + notarization wired from day one — see `04-ui.md` for the in-app update banner.
+`electron-updater` configured against a GitHub releases feed (or S3 later). Code signing + notarization wired from day one - see `04-ui.md` for the in-app update banner.

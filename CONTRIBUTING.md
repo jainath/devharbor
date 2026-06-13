@@ -1,7 +1,7 @@
 # Contributing to DevHarbor
 
 Thanks for your interest in DevHarbor! This is a macOS-first desktop app for managing
-local Node.js dev servers. Contributions of all kinds are welcome — bug reports, fixes,
+local Node.js dev servers. Contributions of all kinds are welcome - bug reports, fixes,
 features, docs, and design feedback.
 
 By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
@@ -20,11 +20,11 @@ pnpm test          # vitest
 
 ## Prerequisites
 
-- **macOS** (Apple Silicon or Intel). The app is macOS-only today — it relies on
+- **macOS** (Apple Silicon or Intel). The app is macOS-only today - it relies on
   `lsof`/`pgrep`, `open -a`, and Unix Node-manager paths. Windows/Linux are not supported
   yet (see the roadmap).
 - **Node 22+** (an `.nvmrc` pins the version) and **pnpm** (`npm i -g pnpm`).
-- **Xcode Command Line Tools** (`xcode-select --install`) — needed to rebuild the native
+- **Xcode Command Line Tools** (`xcode-select --install`) - needed to rebuild the native
   modules (`better-sqlite3`, `node-pty`).
 
 If `pnpm install` fails rebuilding native modules, see
@@ -37,7 +37,7 @@ src/main/        Electron main process (services, IPC, DB, menu)
 src/preload/     contextBridge API surface
 src/renderer/    React UI (components, store, hooks)
 src/shared/      shared types + the typed IPC contract (ipc.ts)
-specs/           the source of truth — read before non-trivial work
+specs/           the source of truth - read before non-trivial work
 ```
 
 ## The specs are the source of truth
@@ -48,16 +48,16 @@ DevHarbor is **spec-driven**. Before non-trivial work, read the relevant file in
 [`specs/PROGRESS.md`](specs/PROGRESS.md) for the current build status.
 
 Quick map:
-- [`specs/01-architecture.md`](specs/01-architecture.md) — process model, IPC, stack
-- [`specs/02-data-model.md`](specs/02-data-model.md) — SQLite schema + core types
-- [`specs/03-features.md`](specs/03-features.md) — every feature with acceptance criteria
-- [`specs/04-ui.md`](specs/04-ui.md) — screens, layout, interactions
+- [`specs/01-architecture.md`](specs/01-architecture.md) - process model, IPC, stack
+- [`specs/02-data-model.md`](specs/02-data-model.md) - SQLite schema + core types
+- [`specs/03-features.md`](specs/03-features.md) - every feature with acceptance criteria
+- [`specs/04-ui.md`](specs/04-ui.md) - screens, layout, interactions
 
 ## Development workflow
 
 1. **Fork** the repo and create a branch off `main`:
    `git checkout -b fix/short-description`
-2. Make your change. Keep it focused — one logical change per PR.
+2. Make your change. Keep it focused - one logical change per PR.
 3. **Match the surrounding code.** Follow existing naming, comment density, and idioms.
 4. Run the checks locally:
    ```bash
@@ -76,7 +76,7 @@ Quick map:
   `sandbox: true`. Don't loosen these.
 - **Native modules** (`better-sqlite3`, `node-pty`) must be rebuilt for Electron's ABI
   (`pnpm rebuild`), not Node's.
-- **Zustand selectors must return stable references** — `?? []` / `?? {}` inside a
+- **Zustand selectors must return stable references** - `?? []` / `?? {}` inside a
   selector causes infinite re-render loops. Use module-level constants.
 
 ## Tests
@@ -95,7 +95,7 @@ Quick map:
 ## Reporting bugs / requesting features
 
 Use the [issue templates](.github/ISSUE_TEMPLATE/). For security issues, **do not open a
-public issue** — see [SECURITY.md](SECURITY.md).
+public issue** - see [SECURITY.md](SECURITY.md).
 
 ## License
 
@@ -104,4 +104,4 @@ By contributing, you agree that your contributions will be licensed under the pr
 submit the work under that license.
 
 Note the [trademark policy](TRADEMARK.md): the code is AGPL, but the **DevHarbor name and logo
-are not** — forks must ship under a different name.
+are not** - forks must ship under a different name.

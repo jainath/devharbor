@@ -1,6 +1,6 @@
-# 03 — Features
+# 03 - Features
 
-Each feature has: a one-line summary, behaviour, edge cases, and acceptance criteria. Features are grouped by area. Phase tags (P1–P4) match [`05-roadmap.md`](05-roadmap.md).
+Each feature has: a one-line summary, behaviour, edge cases, and acceptance criteria. Features are grouped by area. Phase tags (P1-P4) match [`05-roadmap.md`](05-roadmap.md).
 
 ---
 
@@ -10,14 +10,14 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 
 **Behaviour.**
 - "Add App" (sidebar APPS-header `+` icon + Cmd-K) opens a native folder picker (`dialog.showOpenDialog`).
-- On selection, validate: directory exists, contains a `package.json` (warn but allow if not — useful for vanilla Node scripts).
+- On selection, validate: directory exists, contains a `package.json` (warn but allow if not - useful for vanilla Node scripts).
 - Run `DetectionService.detect(path)` and pre-fill: name (dir basename), package manager (lockfile + `packageManager` field), node version (`.nvmrc` / `.node-version` / `engines.node`), discovered scripts, discovered `.env*` files.
 - **Add drawer fields (Phase 10):** the confirmation drawer is fully editable before save:
-  - **Name** — defaults to dir basename.
-  - **Node version** — `NodeVersionPicker` (Auto / System / explicit installed version). Defaults to `auto`; a hint shows the project's pinned version if `.nvmrc`/`engines.node` was detected ("recommend based on the code").
-  - **Package manager** — dropdown pre-selected to the auto-detected PM (from lockfile / `packageManager` field), with an explicit "Auto-detect each run" option and manual npm/yarn/pnpm/bun overrides.
-  - **Default script → first task** — the chosen script is **materialised into the app's first Task on save**, so the app is immediately startable. (Pre-Phase-10 bug: the script was only stored on the app row and no task existed until the next app restart, so Start failed with "No enabled tasks." Fixed by creating the task via `tasks:add` during the add flow.) Choosing "don't create a task yet" is allowed for apps with no obvious entry script.
-  - **Environment variables (optional, collapsed)** — paste a `.env` blob; applied at the app scope on save (secret keys auto-masked).
+  - **Name** - defaults to dir basename.
+  - **Node version** - `NodeVersionPicker` (Auto / System / explicit installed version). Defaults to `auto`; a hint shows the project's pinned version if `.nvmrc`/`engines.node` was detected ("recommend based on the code").
+  - **Package manager** - dropdown pre-selected to the auto-detected PM (from lockfile / `packageManager` field), with an explicit "Auto-detect each run" option and manual npm/yarn/pnpm/bun overrides.
+  - **Default script → first task** - the chosen script is **materialised into the app's first Task on save**, so the app is immediately startable. (Pre-Phase-10 bug: the script was only stored on the app row and no task existed until the next app restart, so Start failed with "No enabled tasks." Fixed by creating the task via `tasks:add` during the add flow.) Choosing "don't create a task yet" is allowed for apps with no obvious entry script.
+  - **Environment variables (optional, collapsed)** - paste a `.env` blob; applied at the app scope on save (secret keys auto-masked).
 - Auto-assign a sidebar color from a fixed palette of 12; user can change later.
 
 **Edge cases.**
@@ -30,7 +30,7 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 - Add an app, see it appear in the sidebar.
 - Detected values are right for a vanilla CRA/Vite/Next project without any clicks.
 - Adding a path that's already registered jumps to it instead of duplicating.
-- **After adding with a default script selected, pressing Start works immediately** — a task exists, no "No enabled tasks" error.
+- **After adding with a default script selected, pressing Start works immediately** - a task exists, no "No enabled tasks" error.
 - The package manager dropdown reflects the detected PM by default; overriding to e.g. `bun` persists on the app.
 
 ---
@@ -62,7 +62,7 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 **Acceptance.**
 - An app with `.nvmrc=20.11.0` starts with that exact version on PATH.
 - An app with `engines.node=">=18 <21"` and installations `18.20.0`, `19.9.0`, `21.0.0` picks `19.9.0`.
-- Removing the installed version and clicking Start surfaces a blocking error with the install command — no silent fallback.
+- Removing the installed version and clicking Start surfaces a blocking error with the install command - no silent fallback.
 
 ---
 
@@ -113,7 +113,7 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 - User stops while orchestration in progress → cancel pending starts, kill what's already up in reverse-topo.
 
 **Acceptance.**
-- Killing `npm run dev` reliably stops the underlying node server and any nodemon/concurrent workers — `lsof -i :3000` is empty within 6s.
+- Killing `npm run dev` reliably stops the underlying node server and any nodemon/concurrent workers - `lsof -i :3000` is empty within 6s.
 - A multi-task app: `migrate` (one-shot) → `api` (port:4000) → `web` (port:3000). Start it. `migrate` runs to exit 0, then `api` spawns, listens on 4000, then `web` spawns. Stopping the app stops `web` first, then `api`. No orphans.
 - Crashed apps stay visible (don't disappear) until acknowledged or restarted.
 
@@ -121,7 +121,7 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 
 ## F5. Script picker  *(P1)*
 
-**Summary.** Choose what to run when creating a task — from `package.json` scripts or a custom command.
+**Summary.** Choose what to run when creating a task - from `package.json` scripts or a custom command.
 
 **Behaviour.**
 - Surfaces in two places: (a) the App header for a single-task app (changes that task's script in place), (b) the task editor when adding/editing a task.
@@ -139,12 +139,12 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 
 ## F6. Env vars (global + per-app + per-task)  *(P3; per-task added Phase 7)*
 
-**Summary.** Three-tier layered env editor — global defaults, per-app overrides, per-task overrides — with `.env` file integration.
+**Summary.** Three-tier layered env editor - global defaults, per-app overrides, per-task overrides - with `.env` file integration.
 
 **Why three tiers (and not two).** App-level env is still essential: shared values like `DATABASE_URL`, `AUTH_SECRET`, `STRIPE_KEY` belong to the whole app, not any single task. Task-level is for values that differ between the tasks of one app (most commonly `PORT`, but also `SERVICE_URL` pointing one task at another, or per-task feature flags). Without a task tier users were forced to either (a) duplicate vars across `customCommand` env prefixes, or (b) ship `.env.local` files with mixed concerns.
 
 **Behaviour.**
-- **Three-tab editor**: **Global**, **App · {name}**, **Task · {name}**. The Task tab only appears when the editor was opened with a task context (from the task tab's right-click menu, from TaskEditor's "Env" affordance, or by clicking the task strip in the EnvEditor itself). Single-task apps may still open the Task tab — useful if you want to keep app-level shared vars separate from one task's `PORT`.
+- **Three-tab editor**: **Global**, **App · {name}**, **Task · {name}**. The Task tab only appears when the editor was opened with a task context (from the task tab's right-click menu, from TaskEditor's "Env" affordance, or by clicking the task strip in the EnvEditor itself). Single-task apps may still open the Task tab - useful if you want to keep app-level shared vars separate from one task's `PORT`.
 - Same table shape on all three: `[enabled] KEY = VALUE [is_secret] [note] [⋯]`.
 - Per-row toggle for `enabled`. Secret rows render value as `••••••` until "show" is clicked.
 - **Inheritance hints**: the App tab shows `⤴ overrides global` next to keys also defined globally. The Task tab shows `⤴ overrides app` *and* `⤴ overrides global` chips next to overridden keys. Effective-merged preview pane lists all three layers stacked.
@@ -163,7 +163,7 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 **Acceptance.**
 - Set `PORT=4000` on the `api` task and `PORT=5173` on the `web` task → starting the app sees each task get its own port without touching app- or global-level env.
 - Set `DEBUG=app:*` globally, `DEBUG=app:auth` on the app, `DEBUG=app:auth:trace` on one task → that one task sees `app:auth:trace`; other tasks of the same app see `app:auth`; other apps see `app:*`.
-- Touching `.env.local` in Finder triggers a banner: "`.env.local` changed on disk — reload?"
+- Touching `.env.local` in Finder triggers a banner: "`.env.local` changed on disk - reload?"
 
 ---
 
@@ -190,13 +190,13 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 
 ## F8. Searchable log history  *(P4)*
 
-**Summary.** A virtualized, searchable, ANSI-styled view of the same task ring buffer that powers the Live xterm. Accessed via the `[Filter]` pill inside the Logs view (not a separate top-level tab — collapsed in the post-v1 polish).
+**Summary.** A virtualized, searchable, ANSI-styled view of the same task ring buffer that powers the Live xterm. Accessed via the `[Filter]` pill inside the Logs view (not a separate top-level tab - collapsed in the post-v1 polish).
 
 **Behaviour.**
 - Backed by `react-window` + `anser`.
 - Plain-text or regex search; case-sensitive toggle; match count.
 - Switches the Logs pane content; the `[Live]` pill returns to xterm.
-- Optional "save to disk" per app (writes `<userData>/logs/<appId>/<runId>.log`) — feature toggle in Settings is wired but the actual disk-write code is deferred.
+- Optional "save to disk" per app (writes `<userData>/logs/<appId>/<runId>.log`) - feature toggle in Settings is wired but the actual disk-write code is deferred.
 
 **Acceptance.**
 - Searching for `ECONNREFUSED` across a 10 k-line buffer returns matches in <50 ms.
@@ -206,17 +206,17 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 
 ## F9. Dashboard / home screen  *(P3; redesigned Phase 7 / Phase 13)*
 
-**Summary.** The **control room** — an aggregate "machine load" stat strip plus a stable card grid for every registered app. Deliberately distinct from the sidebar (the navigation *switcher*). **Card height is invariant across state transitions** — clicking Start never makes anything below jump.
+**Summary.** The **control room** - an aggregate "machine load" stat strip plus a stable card grid for every registered app. Deliberately distinct from the sidebar (the navigation *switcher*). **Card height is invariant across state transitions** - clicking Start never makes anything below jump.
 
 **Behaviour.**
 
-- **Aggregate stat strip (Phase 13)** — four tiles summing across all running tasks: Running (`N / M`, teal when > 0), CPU %, Memory (MB, rolls to GB past 1024), Open ports. This is the dashboard's unique value vs the sidebar.
-- ~~**Recent strip**~~ — **removed Phase 13.** It re-listed apps the sidebar and grid already show; recency quick-access is covered by the sidebar + ⌘K. `RecentStrip.tsx` deleted.
-- **All-apps grid** — stable **alphabetical** order. Cards never auto-reorder on state changes; the user's click target stays put. **Running apps are emphasised in place** — teal inset left edge + lifted surface — never reordered, no layout shift.
+- **Aggregate stat strip (Phase 13)** - four tiles summing across all running tasks: Running (`N / M`, teal when > 0), CPU %, Memory (MB, rolls to GB past 1024), Open ports. This is the dashboard's unique value vs the sidebar.
+- ~~**Recent strip**~~ - **removed Phase 13.** It re-listed apps the sidebar and grid already show; recency quick-access is covered by the sidebar + ⌘K. `RecentStrip.tsx` deleted.
+- **All-apps grid** - stable **alphabetical** order. Cards never auto-reorder on state changes; the user's click target stays put. **Running apps are emphasised in place** - teal inset left edge + lifted surface - never reordered, no layout shift.
 - One card per app: status dot, name, state pill (RUNNING / EXITED / IDLE / CRASHED), task count, running count, CPU%, memory MB, thin CPU progress bar, port chips.
-- **Layout-stable port row (Phase 7)** — every card reserves a fixed-height port-chip row even when the app is stopped (renders an `IDLE` em-dash placeholder chip per task, or just "no ports yet" placeholder text at the same height). Reserved space prevents the card from growing/shrinking when ports come and go. The whole card has a stable min-height so cards in the same row align.
+- **Layout-stable port row (Phase 7)** - every card reserves a fixed-height port-chip row even when the app is stopped (renders an `IDLE` em-dash placeholder chip per task, or just "no ports yet" placeholder text at the same height). Reserved space prevents the card from growing/shrinking when ports come and go. The whole card has a stable min-height so cards in the same row align.
 - Click a card name → open that app's detail view.
-- **Toolbar**: `[Filter by tag ▾]  [Stop all]`. Start-all removed by request — too easy to misfire across many apps.
+- **Toolbar**: `[Filter by tag ▾]  [Stop all]`. Start-all removed by request - too easy to misfire across many apps.
 - **⌘ R / cold boot always lands on Dashboard**.
 - **Sidebar Dashboard entry** shows a green badge with the running-apps count.
 
@@ -234,10 +234,10 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 **Behaviour.**
 
 - **Two-pronged detection** (results unioned, not exclusive):
-  - **Stdout parsing** — `localhost:<port>` / `http(s)://[host]:<port>` / `listening on [port] N` patterns. Adds to a per-task `hinted` set.
-  - **lsof poll** every 2 s — `lsof -nP -iTCP -sTCP:LISTEN -a -Fpn -p <pids>` over the task's process tree (walked via `pgrep -P` to depth 5: covers `npm → cross-spawn shell → tsx/nodemon → user binary`).
-  - **Immediate first tick on `track()`** — no 2 s lag for quickly-listening processes like Vite.
-- **One chip per task** (running OR registered), always with task-name prefix (`<taskName> :<port>`). Tasks with no detected port show a muted `<taskName> —` placeholder. **Phase 7**: the chip row is always rendered with reserved height, so the surrounding card/header doesn't reflow when an app starts. When the app is fully idle (no task running), the row shows one placeholder chip per registered task at the same height as the running version.
+  - **Stdout parsing** - `localhost:<port>` / `http(s)://[host]:<port>` / `listening on [port] N` patterns. Adds to a per-task `hinted` set.
+  - **lsof poll** every 2 s - `lsof -nP -iTCP -sTCP:LISTEN -a -Fpn -p <pids>` over the task's process tree (walked via `pgrep -P` to depth 5: covers `npm → cross-spawn shell → tsx/nodemon → user binary`).
+  - **Immediate first tick on `track()`** - no 2 s lag for quickly-listening processes like Vite.
+- **One chip per task** (running OR registered), always with task-name prefix (`<taskName> :<port>`). Tasks with no detected port show a muted `<taskName> - ` placeholder. **Phase 7**: the chip row is always rendered with reserved height, so the surrounding card/header doesn't reflow when an app starts. When the app is fully idle (no task running), the row shows one placeholder chip per registered task at the same height as the running version.
 - Chips render in **two places**: Dashboard cards, and the App Detail header (on their own row below the path, for breathing room with multi-port apps).
 - Click opens `http://localhost:<port>` externally via `shell.openExternal` (URL scheme allowlist: `http:` / `https:` only).
 
@@ -250,7 +250,7 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 **Acceptance.**
 
 - Single-task app (Astro): within 5 s of `npm run dev` printing "Local: http://localhost:4321/", a `dev :4321` chip appears.
-- Multi-task app: each running task gets its own chip with its name. A task that fails to bind shows `<taskName> —` (not blank).
+- Multi-task app: each running task gets its own chip with its name. A task that fails to bind shows `<taskName> - ` (not blank).
 
 ---
 
@@ -311,14 +311,14 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 
 ---
 
-## F15. Crash handling + run history  *(P3 — partial in v1)*
+## F15. Crash handling + run history  *(P3 - partial in v1)*
 
 **Summary.** Surface non-zero exits prominently. Run-history data is persisted to the DB for future tooling but **not surfaced in the UI** in v1.
 
 **Behaviour.**
 - On crash: state goes `crashed`, exit code shown, last 200 lines of log pinned above the live terminal via `CrashPin` (Restart + Dismiss inline).
 - `run_history` table populated on every task start/stop (one row per task per run). Includes started_at, ended_at, exit_code, exit_signal, was_killed_by_user, node_version, package_manager, command, script.
-- ~~Per-app "History" tab~~ — **dropped from the UI**. The previous tab was a glorified audit log that didn't earn its real estate; CrashPin covers the "why did this just crash" workflow, and "rerun" lives on the task tab strip. The `HistoryView.tsx` component was **deleted in the Phase 11 dead-code cleanup**; run data is still recorded and remains readable via the `runs:list` IPC for a future log-explorer feature.
+- ~~Per-app "History" tab~~ - **dropped from the UI**. The previous tab was a glorified audit log that didn't earn its real estate; CrashPin covers the "why did this just crash" workflow, and "rerun" lives on the task tab strip. The `HistoryView.tsx` component was **deleted in the Phase 11 dead-code cleanup**; run data is still recorded and remains readable via the `runs:list` IPC for a future log-explorer feature.
 
 **Acceptance.**
 - Killing the underlying process from outside (`kill -9`) shows up as `crashed` with no signal misattribution.
@@ -333,8 +333,8 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 **Behaviour.**
 - Register custom protocol on macOS.
 - Supported actions:
-  - `devharbor://open?path=/abs/path` — focus the app for that path (or offer to register if unknown).
-  - `devharbor://start?id=<appId>` — start the named app.
+  - `devharbor://open?path=/abs/path` - focus the app for that path (or offer to register if unknown).
+  - `devharbor://start?id=<appId>` - start the named app.
 
 **Acceptance.**
 - Pasting `devharbor://open?path=$PWD` from a terminal opens the matching app.
@@ -347,7 +347,7 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
 
 **Behaviour.**
 - On launch, check GitHub Releases (or configured feed).
-- If newer: download in background, show a non-blocking banner "Update ready — quit & install."
+- If newer: download in background, show a non-blocking banner "Update ready - quit & install."
 - Setting to disable.
 
 **Acceptance.**
@@ -376,22 +376,22 @@ This is the foundation for: monorepos (one task per workspace), single-repo mult
 
 **Concepts.**
 
-- **Task** — a unit of work, see [02-data-model.md](02-data-model.md). Has `commandKind` (`script` or `custom`), optional working dir / package manager / Node version override (for monorepo workspaces), `dependsOn`, `readiness`, `oneShot` flag.
-- **Readiness signal** — when has this task "completed startup"?
-  - `none` — proceed immediately after spawn (default, current Phase 1 behaviour).
-  - `port:N` — wait until the task's process group is listening on port `N`. Implementation: `lsof -iTCP -sTCP:LISTEN -P -n` filtered by PID group, polled every 500ms.
-  - `log:/regex/` — wait until a stdout chunk matches. Useful for "ready in Xms" banners or anything not bound to a port.
-  - `exit:0` — task is `oneShot`; ready means it exited with the expected code. Required for any `oneShot` task.
-  - `delay:N ms` — fixed timer, last-resort fallback.
-- **Dependency graph** — `dependsOn` is a DAG. Cycles rejected at save time with a clear error citing the cycle. Tasks at the same topological level start in parallel, in `position` order for UI determinism.
+- **Task** - a unit of work, see [02-data-model.md](02-data-model.md). Has `commandKind` (`script` or `custom`), optional working dir / package manager / Node version override (for monorepo workspaces), `dependsOn`, `readiness`, `oneShot` flag.
+- **Readiness signal** - when has this task "completed startup"?
+  - `none` - proceed immediately after spawn (default, current Phase 1 behaviour).
+  - `port:N` - wait until the task's process group is listening on port `N`. Implementation: `lsof -iTCP -sTCP:LISTEN -P -n` filtered by PID group, polled every 500ms.
+  - `log:/regex/` - wait until a stdout chunk matches. Useful for "ready in Xms" banners or anything not bound to a port.
+  - `exit:0` - task is `oneShot`; ready means it exited with the expected code. Required for any `oneShot` task.
+  - `delay:N ms` - fixed timer, last-resort fallback.
+- **Dependency graph** - `dependsOn` is a DAG. Cycles rejected at save time with a clear error citing the cycle. Tasks at the same topological level start in parallel, in `position` order for UI determinism.
 
 **Behaviour.**
 
-- **App start** — topo-sort enabled tasks. For each task in order: wait for all deps' `ready` events, then spawn. Per-task PTY, per-task log stream, per-task status events.
-- **App stop** — reverse-topo over running tasks. SIGTERM → grace → SIGKILL on the process group; `tree-kill` safety net.
-- **Per-task Start/Stop** — exposed in the task tab strip. Manual single-task start does NOT auto-resolve dependencies; surfaces a warning if deps aren't ready.
-- **App-level state** — derived from task states per the table in [02-data-model.md](02-data-model.md). The worst task wins.
-- **Crash blast radius** — if a non-one-shot task crashes mid-orchestration, cancel pending starts but leave already-started tasks alone (so you can inspect their logs). User decides whether to restart or stop the partial set.
+- **App start** - topo-sort enabled tasks. For each task in order: wait for all deps' `ready` events, then spawn. Per-task PTY, per-task log stream, per-task status events.
+- **App stop** - reverse-topo over running tasks. SIGTERM → grace → SIGKILL on the process group; `tree-kill` safety net.
+- **Per-task Start/Stop** - exposed in the task tab strip. Manual single-task start does NOT auto-resolve dependencies; surfaces a warning if deps aren't ready.
+- **App-level state** - derived from task states per the table in [02-data-model.md](02-data-model.md). The worst task wins.
+- **Crash blast radius** - if a non-one-shot task crashes mid-orchestration, cancel pending starts but leave already-started tasks alone (so you can inspect their logs). User decides whether to restart or stop the partial set.
 
 **Edge cases.**
 
@@ -418,12 +418,12 @@ This is the foundation for: monorepos (one task per workspace), single-repo mult
 - **App default** lives in `App.nodeVersionPref`, set via `AppConfigDrawer`'s **Node version** field.
 - **Task override** lives in `Task.nodeVersionPrefOverride`, set via `TaskEditor`'s Node version field. Has an extra "Inherit from app" choice (stored as `null`).
 - **Three preference kinds**:
-  - `auto` — `NodeResolver` reads `.nvmrc` → `.node-version` → `engines.node` from the task's working dir at start time. Standard nvm workflow.
-  - `system` — `which node` resolved on the user's PATH.
-  - `explicit { version }` — a specific installed version chosen from the dropdown.
+  - `auto` - `NodeResolver` reads `.nvmrc` → `.node-version` → `engines.node` from the task's working dir at start time. Standard nvm workflow.
+  - `system` - `which node` resolved on the user's PATH.
+  - `explicit { version }` - a specific installed version chosen from the dropdown.
 - **NodeVersionPicker component** queries `node:list` IPC, which scans `~/.nvm`, `~/.fnm` (3 known paths), `~/.volta`, `~/.asdf`, plus system Node. Versions are deduped across managers; sources displayed (`v20.11.0 · nvm, fnm`).
 - **At task start**, `NodeResolver.resolve(pref, workingDir)` returns a `NodeInstallation { source, version, binDir }`. The bin dir is prepended to the spawned task's `PATH`, so the child sees the right `node` / `npm` / `npx` first.
-- **No `nvm use` shell magic** — we bypass the shell function entirely by picking the binary off the filesystem.
+- **No `nvm use` shell magic** - we bypass the shell function entirely by picking the binary off the filesystem.
 
 **Edge cases.**
 
@@ -441,7 +441,7 @@ This is the foundation for: monorepos (one task per workspace), single-repo mult
 
 ## F21. Folders in the sidebar  *(Phase 8)*
 
-**Summary.** Optional one-level visual grouping of apps in the sidebar. Each app belongs to zero or one folder. Tags remain orthogonal — folders are hierarchy, tags are facets.
+**Summary.** Optional one-level visual grouping of apps in the sidebar. Each app belongs to zero or one folder. Tags remain orthogonal - folders are hierarchy, tags are facets.
 
 **Why not nesting / why not "use tags".**
 - *Nesting:* 95% of dev-tool sidebars (VS Code workspaces, Postman, TablePlus) get away with one level. Schema today is `folder TEXT`; if we later want nesting we change one column to `folder_path TEXT` and split on `/`. Don't pay the complexity now.
@@ -450,12 +450,12 @@ This is the foundation for: monorepos (one task per workspace), single-repo mult
 **Behaviour.**
 
 - **Data**: `apps.folder TEXT` (NULL = ungrouped). Migration `0005_app_folders.sql` adds the column; existing apps default to NULL and surface in the "(Ungrouped)" section.
-- **Sidebar render** — apps grouped by folder, folders sorted alphabetically (case-insensitive), "(Ungrouped)" pinned to the bottom. Each section has a `▾ Name (N)` header that toggles collapse on click. Folder collapse state stored in `localStorage["devharbor:folder-collapse"]` as a JSON object `{ [folderName]: true }` — per-machine, not synced.
-- **Move an app** — right-click an app in the sidebar → **Move to folder ▸** submenu with: existing folders, "New folder…" (prompts for name), and "Remove from folder" (if currently foldered). Or set the folder field in `AppConfigDrawer`.
-- **Rename a folder** — right-click folder header → **Rename folder…** → prompt. Implemented as one UPDATE across all apps with that folder name; the renamed folder picks up its new alphabetical slot.
-- **Delete a folder** — right-click folder header → **Delete folder** → confirm → apps fall back to NULL (move to "(Ungrouped)"). Files on disk are untouched, app rows remain.
-- **AppConfigDrawer Folder field** — text input with a datalist autocomplete of existing folder names. Empty value clears the folder.
-- **Empty state** — if no app has a folder, the sidebar renders the flat list it always did. The first time any app gets a folder, the grouped layout kicks in (with "(Ungrouped)" holding the rest).
+- **Sidebar render** - apps grouped by folder, folders sorted alphabetically (case-insensitive), "(Ungrouped)" pinned to the bottom. Each section has a `▾ Name (N)` header that toggles collapse on click. Folder collapse state stored in `localStorage["devharbor:folder-collapse"]` as a JSON object `{ [folderName]: true }` - per-machine, not synced.
+- **Move an app** - right-click an app in the sidebar → **Move to folder ▸** submenu with: existing folders, "New folder…" (prompts for name), and "Remove from folder" (if currently foldered). Or set the folder field in `AppConfigDrawer`.
+- **Rename a folder** - right-click folder header → **Rename folder…** → prompt. Implemented as one UPDATE across all apps with that folder name; the renamed folder picks up its new alphabetical slot.
+- **Delete a folder** - right-click folder header → **Delete folder** → confirm → apps fall back to NULL (move to "(Ungrouped)"). Files on disk are untouched, app rows remain.
+- **AppConfigDrawer Folder field** - text input with a datalist autocomplete of existing folder names. Empty value clears the folder.
+- **Empty state** - if no app has a folder, the sidebar renders the flat list it always did. The first time any app gets a folder, the grouped layout kicks in (with "(Ungrouped)" holding the rest).
 
 **Edge cases.**
 
@@ -477,7 +477,7 @@ This is the foundation for: monorepos (one task per workspace), single-repo mult
 ## Stretch (post-v1, not in this spec set)
 
 - Docker Compose integration (treat services as pseudo-apps).
-- Multi-app "scenes" — named bundles of *Apps* (across the registry) to start together. (Cross-app orchestration; within-app multi-process is handled by [F19](#f19-multi-task-orchestration-p15).)
+- Multi-app "scenes" - named bundles of *Apps* (across the registry) to start together. (Cross-app orchestration; within-app multi-process is handled by [F19](#f19-multi-task-orchestration-p15).)
 - HTTP request runner for the app's exposed port (would step on Postman's toes; deliberately deferred).
 - Plugins (let a user drop a JS file in `userData/plugins/` to add commands).
 - Per-app keychain-backed secrets.
