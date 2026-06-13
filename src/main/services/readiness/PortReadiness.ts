@@ -66,7 +66,7 @@ async function listListeningPidsOnPort(port: number): Promise<Set<number>> {
     }
     return pids;
   } catch (e) {
-    // lsof exits 1 when nothing matches — that's "not yet listening", not an error.
+    // lsof exits 1 when nothing matches - that's "not yet listening", not an error.
     const err = e as { code?: number; stdout?: string };
     if (typeof err.code === 'number' && err.code === 1) return new Set();
     throw e;

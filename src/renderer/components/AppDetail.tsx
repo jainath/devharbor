@@ -15,6 +15,8 @@ import { AppConfigDrawer } from './AppConfigDrawer';
 import { LogSearchView } from './LogSearchView';
 import { OpenInMenu } from './OpenInMenu';
 import { cn } from '../lib/cn';
+import { isLive as isLiveState, isActive, basename } from '../lib/processState';
+import { invokeOrToast } from '../lib/invoke';
 
 const EMPTY_TASKS: Task[] = [];
 
@@ -79,7 +81,7 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
   }, [running]);
 
   const state = appState ?? 'idle';
-  const isLive = state === 'running' || state === 'starting' || state === 'exiting';
+  const isLive = isLiveState(state);
 
   const start = async (): Promise<void> => {
     setBusy('start');
@@ -188,7 +190,7 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
 
   // One entry per **registered** task (not just running) so the header height
   // is invariant across start/stop. Running tasks show their detected port;
-  // idle tasks show a muted "—" placeholder. Multi-port tasks fan out.
+  // idle tasks show a muted "-" placeholder. Multi-port tasks fan out.
   const taskPortEntries: {
     taskId: string;
     taskName: string;
@@ -199,7 +201,7 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
     .filter((t) => t.enabled)
     .sort((a, b) => a.name.localeCompare(b.name));
   for (const t of orderedTasksForPorts) {
-    const isRunning = taskState[t.id] === 'running' || taskState[t.id] === 'starting';
+    const isRunning = isActive(taskState[t.id]);
     const ports = isRunning ? taskPorts[t.id] ?? [] : [];
     if (ports.length === 0) {
       taskPortEntries.push({
@@ -225,19 +227,21 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
       <div className="titlebar-drag h-10 shrink-0" />
       <header className="titlebar-no-drag border-b border-border px-6 py-3">
         <div className="flex items-center gap-2.5">
-          {/* Single status dot — green+glow when running, muted otherwise (was
+          {/* Single status dot - green+glow when running, muted otherwise (was
               color-identity dot + separate status dot). */}
           <StatusDot state={state} />
-          <h1 className="text-base font-medium text-fg">{app.name}</h1>
-          <span className="text-xs text-fg-subtle">
+          <h1 className="min-w-0 flex-1 truncate text-base font-medium text-fg" title={app.name}>
+            {app.name}
+          </h1>
+          <span className="shrink-0 text-xs text-fg-subtle">
             {labelForState(state)}
             {uptime ? ` · ${uptime}` : ''}
           </span>
-          <div className="ml-auto flex items-center gap-2">
-            {/* Script picker dropdown removed Phase 7 round 2 — single-task and multi-task
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* Script picker dropdown removed Phase 7 round 2 - single-task and multi-task
                 apps now share the exact same header. Editing a task's script lives in
                 the task tab right-click → Edit (consistent across task counts). */}
-            {/* Secondary utilities — uniform icon-only buttons with tooltips. */}
+            {/* Secondary utilities - uniform icon-only buttons with tooltips. */}
             <OpenInMenu path={app.path} />
             <IconButton
               onClick={() => {
@@ -245,18 +249,19 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
                 setEnvOpen(true);
               }}
               title="Environment variables"
+              aria-label="Environment variables"
             >
               <KeyRound className="h-4 w-4" />
             </IconButton>
-            {/* "Tasks" header button removed Phase 7 — the always-on task strip below
+            {/* "Tasks" header button removed Phase 7 - the always-on task strip below
                 carries a "Manage tasks" button, which avoids two doors to the same UI. */}
-            <IconButton onClick={() => setConfigOpen(true)} title="App settings">
+            <IconButton onClick={() => setConfigOpen(true)} title="App settings" aria-label="App settings">
               <Cog className="h-4 w-4" />
             </IconButton>
 
             <Divider />
 
-            {/* Primary lifecycle — the one filled button (or Restart + Stop when running).
+            {/* Primary lifecycle - the one filled button (or Restart + Stop when running).
                 Shared min-w so the labels don't change the button size between states. */}
             {!isLive ? (
               <Button
@@ -292,11 +297,12 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
 
             <Divider />
 
-            {/* Destructive — isolated after a divider; red on hover. */}
+            {/* Destructive - isolated after a divider; red on hover. */}
             <IconButton
               onClick={onRemove}
               disabled={busy != null}
               title="Remove from DevHarbor"
+              aria-label="Remove from DevHarbor"
               danger
             >
               <Trash2 className="h-4 w-4" />
@@ -325,7 +331,7 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
           )}
         </div>
         {/* Port row: always rendered with reserved height so the header doesn't
-            reflow when an app starts/stops. Idle tasks render a muted "—" chip. */}
+            reflow when an app starts/stops. Idle tasks render a muted "-" chip. */}
         <div className="mt-2 flex min-h-[26px] flex-wrap items-center gap-1.5">
           {taskPortEntries.map((entry) => (
             <PortChip
@@ -350,7 +356,9 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
             </span>
             <Button
               onClick={() => {
-                void window.api.invoke('proc:restart', { id: app.id });
+                // Fire-and-forget: route through invokeOrToast so a restart failure
+                // surfaces as a toast instead of a silent unhandled rejection.
+                void invokeOrToast('proc:restart', { id: app.id }, { context: 'Restart failed' });
                 dismissEnvFileChanges(app.id);
               }}
               title="Restart the app to load the changed env files"
@@ -372,7 +380,7 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
         )}
       </header>
 
-      {/* Always-on task strip (Phase 7). Single-task apps see one tab + Manage button —
+      {/* Always-on task strip (Phase 7). Single-task apps see one tab + Manage button - 
           gives single-task apps the same right-click affordances as multi-task. Zero-task
           apps get a minimal placeholder strip with an "Add task" entry point so the user
           isn't stranded. */}
@@ -456,7 +464,7 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
         <div className="flex-1 overflow-hidden p-2">
           {!activeTaskId ? (
             <div className="flex h-full items-center justify-center text-sm text-fg-subtle">
-              No tasks. Click "Tasks" above to add one.
+              No tasks yet. Use "Add task" in the strip above.
             </div>
           ) : logsMode === 'filter' ? (
             <LogSearchView taskId={activeTaskId} />
@@ -488,11 +496,6 @@ export function AppDetail({ app }: { app: App }): JSX.Element {
       {configOpen && <AppConfigDrawer app={app} onClose={() => setConfigOpen(false)} />}
     </main>
   );
-}
-
-function basename(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i === -1 ? p : p.slice(i + 1);
 }
 
 function ModePill({

@@ -1,15 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, EyeOff, Plus, Trash2, X, FileText, ClipboardPaste, ClipboardCopy } from 'lucide-react';
 import { ulid } from 'ulid';
 import type { AppId, EnvVar, Task, TaskId } from '@shared/types';
 import type { EnvFileInfo } from '@shared/ipc';
 import { parseDotEnv, isSecretKey } from '@shared/dotenv';
 import { ErrorBanner } from './ErrorBanner';
+import { useDialog } from '../hooks/useDialog';
+import { openConfirm } from './PromptModal';
 import { cn } from '../lib/cn';
 
 type Scope = 'global' | 'app' | 'task';
 
 const EMPTY: EnvVar[] = [];
+
+/**
+ * Stable serialisation of a row set for dirty comparison. Only the fields the
+ * editor lets the user mutate are included (and in a fixed order) so the result
+ * is byte-identical when nothing meaningful has changed. Row `id`s ARE included
+ * because adding/removing rows must count as dirty even if a paste happens to
+ * reproduce the same keys/values.
+ */
+function snapshotRows(rows: EnvVar[]): string {
+  return JSON.stringify(
+    rows.map((r) => [r.id, r.key, r.value, r.enabled, r.isSecret, r.note ?? ''])
+  );
+}
 
 export function EnvEditor({
   appId,
@@ -21,7 +36,7 @@ export function EnvEditor({
 }: {
   appId: AppId;
   appName: string;
-  /** Tasks for this app — needed for the Task tab + per-task picker. */
+  /** Tasks for this app - needed for the Task tab + per-task picker. */
   tasks?: Task[];
   initialTab?: 'app' | 'global' | 'task';
   /** If provided, the editor opens on the Task tab pre-selected to this task. */
@@ -44,7 +59,31 @@ export function EnvEditor({
   const [showSecrets, setShowSecrets] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
+  // Transient "Saved" confirmation on the Save button (cleared after ~1.5s).
+  const [justSaved, setJustSaved] = useState(false);
 
+  // Last-fetched snapshot per scope. A scope is "dirty" when its current rows
+  // serialise differently from its snapshot - this is what gates closing the
+  // editor and switching tasks so unsaved edits are never silently discarded.
+  const [snapshots, setSnapshots] = useState<Record<Scope, string>>({
+    global: snapshotRows(EMPTY),
+    app: snapshotRows(EMPTY),
+    task: snapshotRows(EMPTY)
+  });
+
+  const dirty = useMemo(
+    () => ({
+      global: snapshotRows(globalVars) !== snapshots.global,
+      app: snapshotRows(appVars) !== snapshots.app,
+      task: snapshotRows(taskVars) !== snapshots.task
+    }),
+    [globalVars, appVars, taskVars, snapshots]
+  );
+  const anyDirty = dirty.global || dirty.app || dirty.task;
+
+  // Refresh only the GLOBAL + APP scopes (and the discovered .env file list).
+  // Kept separate from the task scope so saving one scope never clobbers
+  // unsaved edits in another (IMPROVEMENT-PLAN 5.8).
   const refresh = useCallback(async (): Promise<void> => {
     const [a, g, files] = await Promise.all([
       window.api.invoke('env:getApp', { id: appId }),
@@ -54,15 +93,40 @@ export function EnvEditor({
     setAppVars(a);
     setGlobalVars(g);
     setEnvFiles(files);
+    setSnapshots((s) => ({ ...s, app: snapshotRows(a), global: snapshotRows(g) }));
+  }, [appId]);
+
+  // Re-fetch only the GLOBAL scope (+ envFiles), leaving app/task rows untouched.
+  const refreshGlobal = useCallback(async (): Promise<void> => {
+    const [g, files] = await Promise.all([
+      window.api.invoke('env:getGlobal', undefined),
+      window.api.invoke('env:files', { id: appId })
+    ]);
+    setGlobalVars(g);
+    setEnvFiles(files);
+    setSnapshots((s) => ({ ...s, global: snapshotRows(g) }));
+  }, [appId]);
+
+  // Re-fetch only the APP scope (+ envFiles), leaving global/task rows untouched.
+  const refreshApp = useCallback(async (): Promise<void> => {
+    const [a, files] = await Promise.all([
+      window.api.invoke('env:getApp', { id: appId }),
+      window.api.invoke('env:files', { id: appId })
+    ]);
+    setAppVars(a);
+    setEnvFiles(files);
+    setSnapshots((s) => ({ ...s, app: snapshotRows(a) }));
   }, [appId]);
 
   const refreshTask = useCallback(async (): Promise<void> => {
     if (!activeTaskId) {
       setTaskVars(EMPTY);
+      setSnapshots((s) => ({ ...s, task: snapshotRows(EMPTY) }));
       return;
     }
     const t = await window.api.invoke('env:getTask', { id: activeTaskId });
     setTaskVars(t);
+    setSnapshots((s) => ({ ...s, task: snapshotRows(t) }));
   }, [activeTaskId]);
 
   useEffect(() => {
@@ -98,22 +162,73 @@ export function EnvEditor({
     setCurrent((rows) => rows.filter((r) => r.id !== id));
   };
 
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+    };
+  }, []);
+
+  const flashSaved = (): void => {
+    setJustSaved(true);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setJustSaved(false), 1500);
+  };
+
   const onSave = async (): Promise<void> => {
     setError(null);
     try {
+      // Re-fetch ONLY the saved scope so persisting one tab never resets unsaved
+      // edits in another (IMPROVEMENT-PLAN 5.8).
       if (tab === 'app') {
         await window.api.invoke('env:setApp', { id: appId, vars: appVars });
-        await refresh();
+        await refreshApp();
       } else if (tab === 'global') {
         await window.api.invoke('env:setGlobal', { vars: globalVars });
-        await refresh();
+        await refreshGlobal();
       } else if (tab === 'task' && activeTaskId) {
         await window.api.invoke('env:setTask', { id: activeTaskId, vars: taskVars });
         await refreshTask();
       }
+      flashSaved();
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  // Gate destructive navigation (close / overlay / task-switch) behind a
+  // discard confirmation whenever the relevant scope has unsaved edits.
+  const requestClose = useCallback(async (): Promise<void> => {
+    if (
+      anyDirty &&
+      !(await openConfirm({
+        title: 'Discard unsaved changes?',
+        description: 'You have unsaved environment-variable edits. Closing will lose them.',
+        danger: true,
+        confirmLabel: 'Discard'
+      }))
+    ) {
+      return;
+    }
+    onClose();
+  }, [anyDirty, onClose]);
+
+  // Switching the picked task silently overwrites taskVars via refreshTask, so
+  // confirm a discard first when the task scope is dirty.
+  const requestSelectTask = async (next: TaskId): Promise<void> => {
+    if (next === activeTaskId) return;
+    if (
+      dirty.task &&
+      !(await openConfirm({
+        title: 'Discard unsaved changes?',
+        description: 'You have unsaved edits for this task. Switching will lose them.',
+        danger: true,
+        confirmLabel: 'Discard'
+      }))
+    ) {
+      return;
+    }
+    setActiveTaskId(next);
   };
 
   const applyPaste = (): void => {
@@ -126,7 +241,7 @@ export function EnvEditor({
       enabled: true,
       isSecret: isSecretKey(key)
     }));
-    // Merge by key — incoming overrides existing values, preserves disabled flag.
+    // Merge by key - incoming overrides existing values, preserves disabled flag.
     setCurrent((rows) => {
       const byKey = new Map(rows.map((r) => [r.key, r]));
       for (const r of incoming) {
@@ -146,7 +261,7 @@ export function EnvEditor({
     const lines: string[] = [
       `# Effective env for ${appName}${activeTask ? ` · task ${activeTask.name}` : ''}`,
       `# generated ${new Date().toISOString()}`,
-      `# layering (later wins): global < app < task < .env`
+      `# layering (later wins): .env files < global < app < task`
     ];
     const merged = new Map<string, { value: string; source: Source }>();
     for (const v of globalVars) {
@@ -171,7 +286,7 @@ export function EnvEditor({
   };
 
   // Compute "effective" merged env for the right-hand preview pane.
-  // When the Task tab is active, fold task vars into the merge too — gives the
+  // When the Task tab is active, fold task vars into the merge too - gives the
   // user the exact env the task will see at spawn time.
   const effective = useMemo(() => {
     const merged = new Map<string, { value: string; source: Source }>();
@@ -200,12 +315,27 @@ export function EnvEditor({
     return { globalKeys, appKeys };
   }, [globalVars, appVars]);
 
+  const titleId = 'env-editor-title';
+  // Escape-to-close routes through requestClose so the discard guard still fires.
+  const { dialogProps } = useDialog(() => void requestClose(), titleId);
+
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
-      <div className="flex h-full max-h-[760px] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-border bg-base shadow-2xl">
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6"
+      onMouseDown={(e) => {
+        // Overlay click closes - gated behind the discard confirm.
+        if (e.target === e.currentTarget) void requestClose();
+      }}
+    >
+      <div
+        {...dialogProps}
+        className="flex h-full max-h-[760px] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-border bg-base shadow-2xl"
+      >
         <header className="flex items-center justify-between border-b border-border px-4 py-3">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-medium text-fg">Environment variables</h2>
+            <h2 id={titleId} className="text-sm font-medium text-fg">
+              Environment variables
+            </h2>
             <div className="flex gap-1 rounded-md border border-border bg-surface p-0.5 text-xs">
               <button
                 onClick={() => setTab('global')}
@@ -241,7 +371,7 @@ export function EnvEditor({
             {tab === 'task' && tasks.length > 1 && (
               <select
                 value={activeTaskId ?? ''}
-                onChange={(e) => setActiveTaskId(e.target.value as TaskId)}
+                onChange={(e) => void requestSelectTask(e.target.value as TaskId)}
                 className="rounded-md border border-border bg-surface px-2 py-0.5 text-xs text-fg outline-none"
               >
                 {tasks.map((t) => (
@@ -275,7 +405,7 @@ export function EnvEditor({
               {showSecrets ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
             <button
-              onClick={onClose}
+              onClick={() => void requestClose()}
               className="rounded-md p-1 text-fg-subtle hover:bg-surface hover:text-fg"
               title="Close env editor"
               aria-label="Close"
@@ -314,9 +444,14 @@ export function EnvEditor({
                 </button>
                 <button
                   onClick={() => void onSave()}
-                  className="rounded-md bg-accent px-2 py-0.5 text-[11px] text-accent-fg hover:bg-accent/90"
+                  className={cn(
+                    'rounded-md px-2 py-0.5 text-[11px]',
+                    justSaved
+                      ? 'bg-surface text-fg-muted'
+                      : 'bg-accent text-accent-fg hover:bg-accent/90'
+                  )}
                 >
-                  Save
+                  {justSaved ? 'Saved' : 'Save'}
                 </button>
               </div>
             </div>
@@ -401,7 +536,7 @@ export function EnvEditor({
                             <input
                               value={row.note ?? ''}
                               onChange={(e) => onChangeRow(row.id, { note: e.target.value })}
-                              placeholder="—"
+                              placeholder="-"
                               className="w-full rounded bg-transparent px-1 py-0.5 text-xs text-fg-muted outline-none focus:bg-surface"
                             />
                           </td>
@@ -423,7 +558,7 @@ export function EnvEditor({
             </div>
           </div>
 
-          {/* Right side panel — effective merged env, grouped by winning scope. */}
+          {/* Right side panel - effective merged env, grouped by winning scope. */}
           <aside className="flex w-72 shrink-0 flex-col border-l border-border">
             <div className="border-b border-surface px-4 py-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
               Effective merged env
@@ -438,7 +573,7 @@ export function EnvEditor({
                 (() => {
                   // Partition winners by their source. Task on top (most specific),
                   // then App, then Global. Shadowed (overridden) lower-scope values
-                  // are intentionally not shown — the editor table itself shows them.
+                  // are intentionally not shown - the editor table itself shows them.
                   const groups: Record<
                     Source,
                     [string, { value: string; source: Source }][]

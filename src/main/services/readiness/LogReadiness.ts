@@ -15,7 +15,7 @@ export function makeLogWatcher(
   try {
     regex = new RegExp(pattern, flags ?? '');
   } catch (e) {
-    // Bad regex — emit a non-ready and let the orchestrator decide.
+    // Bad regex - emit a non-ready and let the orchestrator decide.
     queueMicrotask(() => resolveReady(false));
     return { ready, dispose: () => {} };
   }

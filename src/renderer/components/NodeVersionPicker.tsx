@@ -4,10 +4,10 @@ import type { NodeInstallation, NodeVersionPref } from '@shared/types';
 /**
  * Picks a Node version preference for an app or a task.
  *
- *   auto       — let NodeResolver read .nvmrc / .node-version / engines.node from the
+ *   auto       - let NodeResolver read .nvmrc / .node-version / engines.node from the
  *                project at start time
- *   system     — whatever `node` resolves to on the user's PATH
- *   explicit   — a specific installed version (across nvm/fnm/volta/asdf/system)
+ *   system     - whatever `node` resolves to on the user's PATH
+ *   explicit   - a specific installed version (across nvm/fnm/volta/asdf/system)
  *
  * Versions discovered from any installed manager appear in one list, deduped by version.
  */
@@ -66,7 +66,7 @@ export function NodeVersionPicker({
       </select>
       {versions.length === 0 && (
         <span className="text-[10px] text-fg-subtle">
-          No installations detected — try `nvm install &lt;version&gt;`
+          No installations detected - try `nvm install &lt;version&gt;`
         </span>
       )}
     </div>

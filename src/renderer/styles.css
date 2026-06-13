@@ -4,7 +4,7 @@
 
 @layer base {
   /*
-   * Theme palettes — driven by Radix Colors (slate gray scale) for both modes,
+   * Theme palettes - driven by Radix Colors (slate gray scale) for both modes,
    * which is what shadcn/ui, Linear, Vercel, and most modern dev tools use.
    * Each step in the scale has an explicit semantic role:
    *   1  app background
@@ -24,25 +24,25 @@
 
   /*
    * Default = dark theme. Built on Tailwind's **zinc** scale (the shadcn/ui default
-   * dark family) — a soft, slightly-cool dark gray, deliberately lifted off pure black.
+   * dark family) - a soft, slightly-cool dark gray, deliberately lifted off pure black.
    * The earlier near-black (#0a0a0a) + near-white (#fafafa) read as harsh / high-contrast;
    * zinc-900 base + an off-white (#ededf0) foreground is the comfortable, modern default
    * (Linear / Vercel / shadcn). Brand accent stays harbor-teal (#2dd4bf).
    */
   :root,
   .dark {
-    --bg-base: 24 24 27;          /* #18181b  zinc-900 — app background (soft dark gray) */
-    --bg-surface: 32 32 36;       /* #202024  one step up — cards / inputs */
-    --bg-elevated: 42 42 47;      /* #2a2a2f  zinc-800-ish — hover / elevated */
-    --border: 39 39 43;           /* #27272b  zinc-800 — visible but quiet on the base */
-    --border-strong: 63 63 70;    /* #3f3f46  zinc-700 — stronger separators / focus */
-    --fg: 237 237 240;            /* #ededf0  soft off-white — primary text (not harsh) */
-    --fg-muted: 161 161 170;      /* #a1a1aa  zinc-400 — secondary text */
-    --fg-subtle: 113 113 122;     /* #71717a  zinc-500 — tertiary / placeholders */
-    --accent: 45 212 191;         /* #2dd4bf  teal-400 — harbor brand */
-    --accent-fg: 9 9 11;          /* #09090b  near-black — dark text reads on the teal button */
+    --bg-base: 24 24 27;          /* #18181b  zinc-900 - app background (soft dark gray) */
+    --bg-surface: 32 32 36;       /* #202024  one step up - cards / inputs */
+    --bg-elevated: 42 42 47;      /* #2a2a2f  zinc-800-ish - hover / elevated */
+    --border: 39 39 43;           /* #27272b  zinc-800 - visible but quiet on the base */
+    --border-strong: 63 63 70;    /* #3f3f46  zinc-700 - stronger separators / focus */
+    --fg: 237 237 240;            /* #ededf0  soft off-white - primary text (not harsh) */
+    --fg-muted: 161 161 170;      /* #a1a1aa  zinc-400 - secondary text */
+    --fg-subtle: 113 113 122;     /* #71717a  zinc-500 - tertiary / placeholders */
+    --accent: 45 212 191;         /* #2dd4bf  teal-400 - harbor brand */
+    --accent-fg: 9 9 11;          /* #09090b  near-black - dark text reads on the teal button */
 
-    /* Status palettes — DARK. Success uses the reference "run" green (#22c55e). */
+    /* Status palettes - DARK. Success uses the reference "run" green (#22c55e). */
     --danger-bg: 72 26 29;            /* red-4 dark   #481a1d */
     --danger-bg-hover: 84 27 31;      /* red-5 dark   #541b1f */
     --danger-fg: 255 153 154;         /* red-11 dark  #ff9592 */
@@ -53,7 +53,7 @@
     --success-bg-hover: 26 58 38;
     --success-fg: 134 239 172;        /* green-300 */
     --success-border: 34 84 52;
-    --success-strong: 34 197 94;      /* #22c55e  green-500 — reference run-green */
+    --success-strong: 34 197 94;      /* #22c55e  green-500 - reference run-green */
 
     --warn-bg: 74 39 0;               /* amber-4 dark #4a2700 */
     --warn-bg-hover: 91 51 0;         /* amber-5 dark #5b3300 */
@@ -65,16 +65,16 @@
   .light {
     --bg-base: 252 252 253;       /* slate-1   #fbfcfd */
     --bg-surface: 255 255 255;    /* pure white for cards on tinted base */
-    --bg-elevated: 241 243 245;   /* slate-3   #f1f3f5 — hover / button bg */
-    --border: 223 227 230;        /* slate-6   #dfe3e6 — borders visibly separate */
+    --bg-elevated: 241 243 245;   /* slate-3   #f1f3f5 - hover / button bg */
+    --border: 223 227 230;        /* slate-6   #dfe3e6 - borders visibly separate */
     --border-strong: 215 219 223; /* slate-7   #d7dbdf */
     --fg: 17 24 28;               /* slate-12  #11181c */
     --fg-muted: 104 112 118;      /* slate-11  #687076 */
     --fg-subtle: 136 144 150;     /* slate-9   #889096 */
-    --accent: 13 148 136;         /* teal-600  #0d9488 — harbor brand, readable on white */
+    --accent: 13 148 136;         /* teal-600  #0d9488 - harbor brand, readable on white */
     --accent-fg: 255 255 255;
 
-    /* Status palettes — LIGHT: soft bg, deep fg. (Radix red/grass/amber light steps.) */
+    /* Status palettes - LIGHT: soft bg, deep fg. (Radix red/grass/amber light steps.) */
     --danger-bg: 255 239 239;         /* red-3   #ffefef */
     --danger-bg-hover: 255 220 220;   /* red-4   #ffdcdc */
     --danger-fg: 197 36 51;           /* red-11  #c52433 */
@@ -120,7 +120,7 @@ textarea,
 }
 
 /*
- * Status dot — single dot per app/task (DevHarbor UI reference).
+ * Status dot - single dot per app/task (DevHarbor UI reference).
  *   running  → green, soft ring + pulse halo (the "glow")
  *   starting → amber, static
  *   crashed  → red, static

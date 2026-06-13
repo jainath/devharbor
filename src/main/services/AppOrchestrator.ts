@@ -28,6 +28,17 @@ export class AppOrchestrator extends EventEmitter {
   // next start, so a stopped app stays visibly Stopped instead of flickering to Idle.
   private lastOutcome = new Map<AppId, 'exited' | 'crashed'>();
 
+  // Per-app operation lock. start/stop/restart for one app are serialised so a file-change
+  // restart can't overlap a user stop (or another restart) and double-spawn / interleave
+  // (IMPROVEMENT-PLAN 7.4). Different apps still run concurrently.
+  private readonly ops = new Map<AppId, Promise<unknown>>();
+
+  // Cancellation hooks for in-flight starts. The lock serialises a queued stop BEHIND the
+  // start - and doStartApp can sit awaiting readiness for up to readiness_timeout_ms per
+  // level, which is exactly when users reach for Stop. stopApp/restartApp invoke this
+  // synchronously (before enqueueing) so the blocked start bails out immediately.
+  private readonly startCancels = new Map<AppId, () => void>();
+
   constructor(
     private readonly apps: AppRegistry,
     private readonly tasks: TaskRegistry,
@@ -36,6 +47,29 @@ export class AppOrchestrator extends EventEmitter {
     super();
     this.runner.on('status', (e: TaskStatusEvent) => this.onTaskStatus(e));
     this.runner.on('log', (e: TaskLogEvent) => this.emit('task:log', e));
+  }
+
+  /** Serialise an app-scoped operation behind any in-flight one for the same app. */
+  private withLock<T>(appId: AppId, fn: () => Promise<T>): Promise<T> {
+    const prev = this.ops.get(appId) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    // Keep the chain alive even if fn rejects (callers still see the real rejection).
+    this.ops.set(
+      appId,
+      next.then(
+        () => undefined,
+        () => undefined
+      )
+    );
+    return next;
+  }
+
+  /** Drop the sticky stopped/crashed badge for an app (called when it's removed). */
+  clearOutcome(appId: AppId): void {
+    this.lastOutcome.delete(appId);
+    this.ops.delete(appId);
+    this.startCancels.get(appId)?.();
+    this.startCancels.delete(appId);
   }
 
   /** Snapshot of every running task across all apps. */
@@ -47,7 +81,7 @@ export class AppOrchestrator extends EventEmitter {
    * App-level summaries. Includes every app with a running task PLUS any app that ran and
    * stopped this session (sticky `lastOutcome`) so a renderer reload (Cmd+R) re-hydrates the
    * Stopped/Crashed badge instead of snapping it back to Idle. Without the latter, the
-   * `setRunningApps` snapshot — built only from running tasks — would erase the exited state.
+   * `setRunningApps` snapshot - built only from running tasks - would erase the exited state.
    */
   listApps(): RunningProcess[] {
     const byApp = new Map<AppId, RunningTask[]>();
@@ -86,13 +120,17 @@ export class AppOrchestrator extends EventEmitter {
     return derived;
   }
 
-  async startApp(appId: AppId): Promise<void> {
+  startApp(appId: AppId): Promise<void> {
+    return this.withLock(appId, () => this.doStartApp(appId));
+  }
+
+  private async doStartApp(appId: AppId): Promise<void> {
     const allTasks = this.tasks.list(appId).filter((t) => t.enabled);
     if (allTasks.length === 0) {
-      throw new Error('No enabled tasks for this app. Add one in Config.');
+      throw new Error('No enabled tasks for this app. Add one via Manage tasks.');
     }
 
-    // Fresh run — drop any sticky "stopped/crashed" outcome from a previous run.
+    // Fresh run - drop any sticky "stopped/crashed" outcome from a previous run.
     this.lastOutcome.delete(appId);
 
     // Mark the app as recently used. Drives Dashboard recently-used sort and
@@ -123,35 +161,67 @@ export class AppOrchestrator extends EventEmitter {
 
     let cancelled = false;
 
-    for (const level of levels) {
-      // Skip tasks already running (e.g. user manually started one).
-      const toStart: Task[] = [];
-      const awaitFor: Promise<boolean>[] = [];
+    // A queued stop/restart cancels this start synchronously, so we never sit on the lock
+    // through a long readiness wait while the user's Stop click is stuck behind us.
+    let stopRequested = false;
+    const stopSignal = new Promise<void>((resolve) => {
+      this.startCancels.set(appId, () => {
+        stopRequested = true;
+        resolve();
+      });
+    });
 
-      for (const id of level) {
-        const t = byId.get(id)!;
-        if (this.runner.isRunning(id)) {
-          // Already running — still need to wait for readiness if not already ready.
-          if (!this.runner.isReady(id)) {
-            // We don't have a handle on the existing readiness promise here; skip waiting.
-            // Practical effect: if the user manually started a task with a long readiness,
-            // the orchestrator won't block on it. Acceptable for v1; document.
+    try {
+      for (const level of levels) {
+        if (stopRequested) break;
+        // Skip tasks already running (e.g. user manually started one).
+        const toStart: Task[] = [];
+        const awaitFor: Promise<boolean>[] = [];
+
+        for (const id of level) {
+          const t = byId.get(id)!;
+          if (this.runner.isRunning(id)) {
+            // Already running - still need to wait for readiness if not already ready.
+            if (!this.runner.isReady(id)) {
+              // We don't have a handle on the existing readiness promise here; skip waiting.
+              // Practical effect: if the user manually started a task with a long readiness,
+              // the orchestrator won't block on it. Acceptable for v1; document.
+            }
+            continue;
           }
-          continue;
+          toStart.push(t);
         }
-        toStart.push(t);
-      }
 
-      // Start the level in parallel.
-      const started = await Promise.all(toStart.map((t) => this.runner.start(t)));
-      for (const s of started) awaitFor.push(s.awaitReady);
+        // Start the level in parallel.
+        const started = await Promise.all(toStart.map((t) => this.runner.start(t)));
+        for (const s of started) awaitFor.push(s.awaitReady);
 
-      // Wait for all to hit ready (or fail).
-      const results = await Promise.all(awaitFor);
-      if (results.some((ok) => !ok)) {
-        cancelled = true;
-        break;
+        // Wait for all to hit ready (or fail) - or for a stop to cancel the sequence. The
+        // queued stop then tears down whatever already spawned.
+        const results = await Promise.race([
+          Promise.all(awaitFor),
+          stopSignal.then(() => null)
+        ]);
+        if (results === null) break; // cancelled by a queued stop/restart
+        if (results.some((ok) => !ok)) {
+          cancelled = true;
+          break;
+        }
       }
+    } catch (err) {
+      // A task threw while spawning (folder moved, Node version missing, env build failed).
+      // Always emit a terminal state so the renderer never hangs on 'starting'
+      // (IMPROVEMENT-PLAN 5.4); the rejection still propagates so the caller can surface it.
+      this.emit('proc:status', { appId, state: 'crashed' as ProcessState });
+      throw err;
+    } finally {
+      this.startCancels.delete(appId);
+    }
+
+    if (stopRequested) {
+      // The queued stop emits its own terminal status; just reflect the current state.
+      this.emit('proc:status', { appId, state: this.appState(appId) });
+      return;
     }
 
     this.emit('proc:status', {
@@ -160,7 +230,14 @@ export class AppOrchestrator extends EventEmitter {
     });
   }
 
-  async stopApp(appId: AppId): Promise<void> {
+  stopApp(appId: AppId): Promise<void> {
+    // Cancel any in-flight start FIRST (synchronously) so this stop isn't queued behind a
+    // readiness wait that can hold the lock for up to readiness_timeout_ms per level.
+    this.startCancels.get(appId)?.();
+    return this.withLock(appId, () => this.doStopApp(appId));
+  }
+
+  private async doStopApp(appId: AppId): Promise<void> {
     const enabledTasks = this.tasks.list(appId).filter((t) => t.enabled);
     const ids = enabledTasks.map((t) => t.id);
     const depsMap = new Map<TaskId, TaskId[]>();
@@ -188,10 +265,15 @@ export class AppOrchestrator extends EventEmitter {
     this.emit('proc:status', { appId, state: 'exited' as ProcessState });
   }
 
-  async restartApp(appId: AppId): Promise<void> {
-    await this.stopApp(appId);
-    await new Promise((r) => setTimeout(r, 100));
-    await this.startApp(appId);
+  restartApp(appId: AppId): Promise<void> {
+    // Cancel an in-flight start so the restart isn't queued behind its readiness waits.
+    this.startCancels.get(appId)?.();
+    // One lock acquisition for the whole stop→start so nothing interleaves between them.
+    return this.withLock(appId, async () => {
+      await this.doStopApp(appId);
+      await new Promise((r) => setTimeout(r, 100));
+      await this.doStartApp(appId);
+    });
   }
 
   async startTask(taskId: TaskId): Promise<RunningTask> {
@@ -203,6 +285,30 @@ export class AppOrchestrator extends EventEmitter {
 
   async stopTask(taskId: TaskId): Promise<void> {
     await this.runner.stop(taskId);
+  }
+
+  /** How many tasks are currently live (for the quit confirmation). Includes mid-spawn starts. */
+  runningTaskCount(): number {
+    const live = this.runner
+      .list()
+      .filter((t) => t.state === 'running' || t.state === 'starting' || t.state === 'exiting');
+    const liveIds = new Set(live.map((t) => t.taskId));
+    const pending = this.runner.pendingStartIds().filter((id) => !liveIds.has(id));
+    return live.length + pending.length;
+  }
+
+  /**
+   * Stop every running task, bounded by each task's kill-grace. Called on quit so dev
+   * servers are torn down gracefully (SIGTERM → grace → SIGKILL tree) instead of being left
+   * as orphans when the PTY master closes (IMPROVEMENT-PLAN 5.9). Mid-spawn starts are
+   * included - runner.stop() awaits the pending spawn before killing it.
+   */
+  async stopAllRunning(): Promise<void> {
+    const ids = new Set<TaskId>([
+      ...this.runner.list().map((t) => t.taskId),
+      ...this.runner.pendingStartIds()
+    ]);
+    await Promise.allSettled([...ids].map((id) => this.runner.stop(id)));
   }
 
   private onTaskStatus(e: TaskStatusEvent): void {
@@ -274,7 +380,7 @@ function deriveAppState(allTasks: Task[], running: RunningTask[]): ProcessState 
   for (const t of allTasks) {
     const r = runningById.get(t.id);
     if (!r) {
-      // Not tracked — either never started or already torn down.
+      // Not tracked - either never started or already torn down.
       continue;
     }
     if (r.state === 'starting') anyStarting = true;
@@ -292,7 +398,7 @@ function deriveAppState(allTasks: Task[], running: RunningTask[]): ProcessState 
   if (anyStarting || anyNotReady) return 'starting';
   if (anyRunning) return 'running';
   // A task that's tracked-but-exited (the brief post-stop window before teardown) reads
-  // as 'exited', not 'idle' — so the app doesn't flicker Idle → Exited → Idle on stop.
+  // as 'exited', not 'idle' - so the app doesn't flicker Idle → Exited → Idle on stop.
   if (anyExited) return 'exited';
   return 'idle';
 }

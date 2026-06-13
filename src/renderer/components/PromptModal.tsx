@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, AlertTriangle } from 'lucide-react';
+import { useDialog } from '../hooks/useDialog';
 
 /**
- * Lightweight in-app dialogs — replace `window.prompt()` / `window.confirm()`,
+ * Lightweight in-app dialogs - replace `window.prompt()` / `window.confirm()`,
  * which are silently no-op'd or visually inconsistent inside Electron's
  * BrowserWindow. Promise-style API:
  *
@@ -56,54 +57,38 @@ type PromptState = PromptArgs & { mode: 'prompt'; resolve: (v: string | null) =>
 type ConfirmState = ConfirmArgs & { mode: 'confirm'; resolve: (v: boolean) => void };
 type DialogState = PromptState | ConfirmState;
 
+// Stable id for the dialog heading so aria-labelledby can point at it.
+const TITLE_ID = 'prompt-modal-title';
+
 /**
- * Mount once at the root. Renders nothing until openPrompt()/openConfirm() is awaited.
- * Backwards-compatible alias `PromptModalHost` is exported below.
+ * The actual dialog panel. Split out from DialogHost so it mounts only while a
+ * dialog is open - useDialog's effect runs on mount/unmount, which is exactly
+ * the open/close lifecycle we want for its focus-into / Tab-trap / Escape /
+ * focus-restore behaviour. (Mounting useDialog on the always-present DialogHost
+ * would capture the wrong "previously focused" element and never restore.)
  */
-export function DialogHost(): JSX.Element | null {
-  const [state, setState] = useState<DialogState | null>(null);
-  const [value, setValue] = useState('');
+function DialogPanel({
+  state,
+  onClose
+}: {
+  state: DialogState;
+  onClose: () => void;
+}): JSX.Element {
+  const [value, setValue] = useState(state.mode === 'prompt' ? state.defaultValue ?? '' : '');
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // Delegates Escape (window-level capture → keeps working after focus leaves
+  // the input), Tab/Shift+Tab focus trap, and focus restore on close to the
+  // shared hook. onClose here means "cancel" - same as the X / backdrop click.
+  // useDialog focuses the [data-autofocus] element (the input here); we follow
+  // up to select its contents so a prefilled defaultValue is overwrite-ready.
+  const { dialogProps } = useDialog(onClose, TITLE_ID);
 
   useEffect(() => {
-    openPromptImpl = (args) =>
-      new Promise<string | null>((resolve) => {
-        setValue(args.defaultValue ?? '');
-        setError(null);
-        setState({ ...args, mode: 'prompt', resolve });
-      });
-    openConfirmImpl = (args) =>
-      new Promise<boolean>((resolve) => {
-        setState({ ...args, mode: 'confirm', resolve });
-      });
-    return () => {
-      openPromptImpl = null;
-      openConfirmImpl = null;
-    };
-  }, []);
-
-  // Focus the input (prompt) or the confirm button (confirm) when shown.
-  useEffect(() => {
-    if (!state) return;
-    requestAnimationFrame(() => {
-      if (state.mode === 'prompt') {
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      } else {
-        confirmBtnRef.current?.focus();
-      }
-    });
-  }, [state]);
-
-  if (!state) return null;
-
-  const cancel = (): void => {
-    if (state.mode === 'prompt') state.resolve(null);
-    else state.resolve(false);
-    setState(null);
-  };
+    if (state.mode !== 'prompt') return;
+    requestAnimationFrame(() => inputRef.current?.select());
+  }, [state.mode]);
 
   const confirmPrompt = (): void => {
     if (state.mode !== 'prompt') return;
@@ -120,13 +105,11 @@ export function DialogHost(): JSX.Element | null {
       return;
     }
     state.resolve(trimmed);
-    setState(null);
   };
 
   const confirmConfirm = (): void => {
     if (state.mode !== 'confirm') return;
     state.resolve(true);
-    setState(null);
   };
 
   const danger = state.mode === 'confirm' && state.danger;
@@ -134,31 +117,34 @@ export function DialogHost(): JSX.Element | null {
     ? 'rounded-md border border-danger-border bg-danger-bg px-3 py-1 text-sm text-danger-fg hover:bg-danger-bg-hover'
     : 'rounded-md bg-accent px-3 py-1 text-sm text-accent-fg hover:bg-accent/90';
 
-  return createPortal(
+  return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) cancel();
+        if (e.target === e.currentTarget) onClose();
       }}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          cancel();
-        }
+        // Enter-to-confirm for the confirm dialog (the prompt input handles its
+        // own Enter). Escape/Tab are owned by useDialog at the window level.
         if (e.key === 'Enter' && state.mode === 'confirm') {
           e.preventDefault();
           confirmConfirm();
         }
       }}
     >
-      <div className="w-full max-w-md overflow-hidden rounded-lg border border-border bg-base shadow-2xl">
+      <div
+        {...dialogProps}
+        className="w-full max-w-md overflow-hidden rounded-lg border border-border bg-base shadow-2xl outline-none"
+      >
         <header className="flex items-center justify-between border-b border-border px-4 py-3">
           <div className="flex items-center gap-2">
             {danger && <AlertTriangle className="h-4 w-4 text-danger-fg" />}
-            <h3 className="text-sm font-medium text-fg">{state.title}</h3>
+            <h3 id={TITLE_ID} className="text-sm font-medium text-fg">
+              {state.title}
+            </h3>
           </div>
           <button
-            onClick={cancel}
+            onClick={onClose}
             className="rounded-md p-1 text-fg-subtle hover:bg-surface hover:text-fg"
             title="Cancel"
             aria-label="Cancel"
@@ -174,6 +160,7 @@ export function DialogHost(): JSX.Element | null {
             <>
               <input
                 ref={inputRef}
+                data-autofocus
                 value={value}
                 onChange={(e) => {
                   setValue(e.target.value);
@@ -194,13 +181,13 @@ export function DialogHost(): JSX.Element | null {
         </div>
         <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-2">
           <button
-            onClick={cancel}
+            onClick={onClose}
             className="rounded-md px-2.5 py-1 text-sm text-fg-muted hover:bg-surface"
           >
             {state.mode === 'confirm' ? state.cancelLabel ?? 'Cancel' : 'Cancel'}
           </button>
           <button
-            ref={confirmBtnRef}
+            data-autofocus={state.mode === 'confirm' ? true : undefined}
             onClick={state.mode === 'prompt' ? confirmPrompt : confirmConfirm}
             className={confirmBtnClass}
           >
@@ -208,10 +195,71 @@ export function DialogHost(): JSX.Element | null {
           </button>
         </footer>
       </div>
-    </div>,
-    document.body
+    </div>
   );
 }
 
-/** Backwards-compatible alias — App.tsx mounts this. */
+/**
+ * Mount once at the root. Renders nothing until openPrompt()/openConfirm() is awaited.
+ * Backwards-compatible alias `PromptModalHost` is exported below.
+ */
+export function DialogHost(): JSX.Element | null {
+  const [state, setState] = useState<DialogState | null>(null);
+  // Monotonic id per shown dialog: keys DialogPanel so a replacement remounts it (fresh
+  // input state), and lets us detect staleness.
+  const [dialogId, setDialogId] = useState(0);
+  // Live mirror of `state` so the open* impls can settle a DISPLACED dialog's promise.
+  // Without this, opening a second prompt/confirm while one is showing would silently drop
+  // the first dialog's `resolve` and its `await` would hang forever.
+  const currentRef = useRef<DialogState | null>(null);
+  currentRef.current = state;
+
+  useEffect(() => {
+    const displace = (): void => {
+      const prev = currentRef.current;
+      if (!prev) return;
+      if (prev.mode === 'prompt') prev.resolve(null);
+      else prev.resolve(false);
+    };
+    openPromptImpl = (args) =>
+      new Promise<string | null>((resolve) => {
+        displace();
+        setDialogId((n) => n + 1);
+        setState({ ...args, mode: 'prompt', resolve });
+      });
+    openConfirmImpl = (args) =>
+      new Promise<boolean>((resolve) => {
+        displace();
+        setDialogId((n) => n + 1);
+        setState({ ...args, mode: 'confirm', resolve });
+      });
+    return () => {
+      openPromptImpl = null;
+      openConfirmImpl = null;
+    };
+  }, []);
+
+  if (!state) return null;
+
+  // Cancel resolves with the negative value (null / false) and closes.
+  const cancel = (): void => {
+    if (state.mode === 'prompt') state.resolve(null);
+    else state.resolve(false);
+    setState(null);
+  };
+
+  // DialogPanel resolves the positive cases directly via state.resolve, but only
+  // the host can null out `state` to unmount the panel (and let useDialog restore
+  // focus). So we hand the panel a state whose resolve also clears host state.
+  // The ternary keeps the discriminated union intact - spreading the union as a
+  // whole would widen `resolve`'s parameter to `string | null | boolean`.
+  const wrapped: DialogState =
+    state.mode === 'prompt'
+      ? { ...state, resolve: (v: string | null) => { state.resolve(v); setState(null); } }
+      : { ...state, resolve: (v: boolean) => { state.resolve(v); setState(null); } };
+
+  return createPortal(<DialogPanel key={dialogId} state={wrapped} onClose={cancel} />, document.body);
+}
+
+/** Backwards-compatible alias - App.tsx mounts this. */
 export const PromptModalHost = DialogHost;

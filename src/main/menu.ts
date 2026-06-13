@@ -8,11 +8,11 @@ const WEBSITE = 'https://www.devharbor.app';
  * Install the application menu.
  *
  * The default Electron menu ships developer affordances (Toggle DevTools, Force Reload)
- * and a "Learn More → electronjs.org" Help link — neither belongs in a shipped app. This
+ * and a "Learn More → electronjs.org" Help link - neither belongs in a shipped app. This
  * builds a clean, native macOS menu instead.
  *
  * Notes:
- * - **Reload (⌘R) is kept in every build** — the renderer relies on a hard reload to
+ * - **Reload (⌘R) is kept in every build** - the renderer relies on a hard reload to
  *   re-bootstrap onto the Dashboard (see App.tsx). Force Reload + Toggle DevTools are
  *   gated to dev only.
  * - The **Edit** submenu (undo/cut/copy/paste/select-all) is required: once a custom
@@ -113,6 +113,10 @@ export function installAppMenu(
     {
       role: 'help',
       submenu: [
+        // Forwarded to the renderer so the result (toast / up-to-date / error) surfaces there.
+        { label: 'Check for Updates…', click: send('menu:checkUpdates') },
+        { label: 'Open Logs Folder', click: send('menu:openLogs') },
+        { type: 'separator' },
         {
           label: `${APP_NAME} Website`,
           click: () => void shell.openExternal(WEBSITE)

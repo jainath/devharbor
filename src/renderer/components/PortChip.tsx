@@ -21,10 +21,10 @@ export function PortChip({
           'inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 font-mono text-[11px] text-fg-subtle',
           className
         )}
-        title={label ? `${label} — no listening port detected` : 'no listening port'}
+        title={label ? `${label} - no listening port detected` : 'no listening port'}
       >
         {label && <span>{label}</span>}
-        <span>—</span>
+        <span>-</span>
       </span>
     );
   }

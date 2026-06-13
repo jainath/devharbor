@@ -77,6 +77,10 @@ export type TaskStatusEvent = {
  */
 export class TaskRunner extends EventEmitter {
   private readonly tracked = new Map<TaskId, Tracked>();
+  // Serialises concurrent start() calls for the SAME task to a single spawn. Without this,
+  // `proc:start` + `task:start` (or restart-watcher + a user click) race between the
+  // isRunning check and tracked.set and both spawn a PTY (IMPROVEMENT-PLAN 5.3).
+  private readonly pending = new Map<TaskId, Promise<{ snapshot: RunningTask; awaitReady: Promise<boolean> }>>();
 
   constructor(
     private readonly registry: AppRegistry,
@@ -100,7 +104,7 @@ export class TaskRunner extends EventEmitter {
     return this.logs.read(taskId);
   }
 
-  /** Last N lines from the buffer — used by the crash-pin UI. */
+  /** Last N lines from the buffer - used by the crash-pin UI. */
   tailBuffer(taskId: TaskId, maxLines = 200): string {
     return this.logs.tail(taskId, maxLines);
   }
@@ -123,6 +127,12 @@ export class TaskRunner extends EventEmitter {
     return [...this.tracked.values()].map(toRunningTask);
   }
 
+  /** Task ids whose start() is still mid-spawn (not yet tracked). The quit path must count
+      and stop these too, or a spawn completing after teardown leaves an orphan process. */
+  pendingStartIds(): TaskId[] {
+    return [...this.pending.keys()];
+  }
+
   get(taskId: TaskId): RunningTask | null {
     const t = this.tracked.get(taskId);
     return t ? toRunningTask(t) : null;
@@ -141,13 +151,48 @@ export class TaskRunner extends EventEmitter {
    * Start one task. Returns a snapshot of the running state.
    * `awaitReady` returns a promise that resolves to true if the task hits its
    * readiness signal, false if it exited first.
+   *
+   * Concurrency-safe: if the task is already live (starting/running/exiting) the existing
+   * run is returned; if another start() for the same task is mid-flight, its promise is
+   * shared rather than spawning a second PTY.
    */
-  async start(task: Task): Promise<{ snapshot: RunningTask; awaitReady: Promise<boolean> }> {
-    if (this.isRunning(task.id)) {
-      const t = this.tracked.get(task.id)!;
-      return { snapshot: toRunningTask(t), awaitReady: t.readinessWatcher?.ready ?? Promise.resolve(t.ready) };
+  start(task: Task): Promise<{ snapshot: RunningTask; awaitReady: Promise<boolean> }> {
+    const cur = this.tracked.get(task.id);
+    if (cur && (cur.state === 'starting' || cur.state === 'running')) {
+      return Promise.resolve({
+        snapshot: toRunningTask(cur),
+        awaitReady: cur.readinessWatcher?.ready ?? Promise.resolve(cur.ready)
+      });
     }
+    const inflight = this.pending.get(task.id);
+    if (inflight) return inflight;
+    // 'exiting' = a stop's kill-grace window. Returning the DYING run here would make the
+    // caller's start a no-op (its awaitReady may even already be true), so the user's fresh
+    // Start would silently never restart the task. Wait for the teardown to finish, then
+    // spawn a new run - deduped through `pending` like any other start.
+    const p = (
+      cur && cur.state === 'exiting'
+        ? this.waitForTeardown(task.id, cur).then(() => this.doStart(task))
+        : this.doStart(task)
+    ).finally(() => this.pending.delete(task.id));
+    this.pending.set(task.id, p);
+    return p;
+  }
 
+  /** Resolve once the given run is gone from tracking (or replaced). Bounded wait. */
+  private async waitForTeardown(taskId: TaskId, run: Tracked): Promise<void> {
+    const grace = this.settings?.get('kill_grace_ms') ?? DEFAULT_KILL_GRACE_MS;
+    const deadline = Date.now() + grace + 5000;
+    while (Date.now() < deadline) {
+      const cur = this.tracked.get(taskId);
+      if (cur !== run || cur.state === 'exited' || cur.state === 'crashed') return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  private async doStart(
+    task: Task
+  ): Promise<{ snapshot: RunningTask; awaitReady: Promise<boolean> }> {
     const app = this.registry.get(task.appId);
     if (!app) throw new Error(`Unknown app for task: ${task.appId}`);
 
@@ -163,6 +208,7 @@ export class TaskRunner extends EventEmitter {
       customCommand: task.customCommand
     });
 
+    // env.build is BEFORE spawn - a failure here throws with no live process to orphan.
     const env = await this.env.build({ app, task, nodeBinDir: node.binDir, cwd });
 
     const pty = ptySpawn(file, args, {
@@ -173,16 +219,22 @@ export class TaskRunner extends EventEmitter {
       env
     });
 
-    // Open a run_history row.
-    const runId = this.history.start({
-      appId: app.id,
-      taskId: task.id,
-      taskName: task.name,
-      script: task.script,
-      customCommand: task.customCommand,
-      nodeVersion: node.version,
-      packageManager: pm
-    });
+    // Open a run_history row. NON-FATAL: a DB hiccup here must not leave a spawned PTY with
+    // no tracked entry / handlers (an unstoppable orphan) - the rest tolerates runId === null.
+    let runId: string | null = null;
+    try {
+      runId = this.history.start({
+        appId: app.id,
+        taskId: task.id,
+        taskName: task.name,
+        script: task.script,
+        customCommand: task.customCommand,
+        nodeVersion: node.version,
+        packageManager: pm
+      });
+    } catch (e) {
+      console.warn('[taskrunner] run_history.start failed; continuing without a history row', e);
+    }
 
     const tracked: Tracked = {
       pty,
@@ -216,7 +268,10 @@ export class TaskRunner extends EventEmitter {
     this.ports.track(task.id, app.id, pty.pid);
 
     // Bridge PTY → durable log buffer + coalesced IPC + readiness + port hint listeners.
+    // Identity-guarded: a stale PTY (from a superseded run of the same task) must not feed
+    // its output into the successor run.
     pty.onData((chunk: string) => {
+      if (this.tracked.get(task.id) !== tracked) return;
       this.logs.append(task.id, chunk);
       this.ports.observeChunk(task.id, chunk);
       for (const l of tracked.logListeners) {
@@ -230,64 +285,62 @@ export class TaskRunner extends EventEmitter {
     });
 
     pty.onExit(({ exitCode, signal }) => {
-      const t = this.tracked.get(task.id);
-      if (!t) return;
-      // Flush any pending coalesced log chunk before status flips.
-      this.flushLogEmit(t);
-      t.exitCode = exitCode;
-      t.exitSignal = signal ? String(signal) : null;
-      t.state = t.userKilled
-        ? 'exited'
-        : exitCode === 0
-        ? 'exited'
-        : 'crashed';
+      // Operate on THIS closure's own Tracked instance, never look it up by id - otherwise a
+      // stale PTY's exit would mutate the successor run (mark it exited, finish its history,
+      // untrack its live stats). Only touch shared/monitoring state if we're still current.
+      const isCurrent = this.tracked.get(task.id) === tracked;
+      this.flushLogEmit(tracked);
+      tracked.exitCode = exitCode;
+      tracked.exitSignal = signal ? String(signal) : null;
+      tracked.state = tracked.userKilled ? 'exited' : exitCode === 0 ? 'exited' : 'crashed';
 
-      // Close the run_history row.
-      if (t.runId) {
-        this.history.finish(t.runId, {
-          exitCode: t.exitCode,
-          exitSignal: t.exitSignal,
-          wasKilledByUser: t.userKilled
+      if (tracked.runId) {
+        this.history.finish(tracked.runId, {
+          exitCode: tracked.exitCode,
+          exitSignal: tracked.exitSignal,
+          wasKilledByUser: tracked.userKilled
         });
+        tracked.runId = null; // guard against a later force-finalize double-finishing
       }
 
-      for (const l of t.statusListeners) {
+      for (const l of tracked.statusListeners) {
         try {
-          l(t.state, t.exitCode);
+          l(tracked.state, tracked.exitCode);
         } catch {
           // ignore
         }
       }
-      this.emitStatus(t);
-      // Stop monitoring this task immediately.
+      tracked.readinessWatcher?.dispose();
+
+      if (!isCurrent) return; // a newer run replaced this task - leave its state alone
+      this.emitStatus(tracked);
       this.stats.untrack(task.id);
       this.ports.untrack(task.id);
-      // Keep around briefly so the renderer can read final state.
+      this.logs.markExited(task.id); // buffer becomes evictable + self-frees after a delay
+
+      // Keep around briefly so the renderer can read final state, then delete (identity-checked).
       setTimeout(() => {
-        const cur = this.tracked.get(task.id);
-        if (cur && (cur.state === 'exited' || cur.state === 'crashed')) {
-          cur.readinessWatcher?.dispose();
+        if (this.tracked.get(task.id) === tracked) {
           this.tracked.delete(task.id);
         }
       }, 1500);
     });
 
     // Flip to 'running' next tick so the UI sees the transition.
-    // Guarded: if the process exited synchronously (instant crash), onExit already
-    // set state to exited/crashed — don't overwrite.
+    // Guarded: if the process exited synchronously (instant crash), onExit already set
+    // state to exited/crashed - don't overwrite; and only act if still the current run.
     setTimeout(() => {
-      const t = this.tracked.get(task.id);
-      if (!t) return;
-      if (t.state !== 'starting') return;
-      t.state = 'running';
-      for (const l of t.statusListeners) {
+      if (this.tracked.get(task.id) !== tracked) return;
+      if (tracked.state !== 'starting') return;
+      tracked.state = 'running';
+      for (const l of tracked.statusListeners) {
         try {
-          l(t.state, null);
+          l(tracked.state, null);
         } catch {
           // ignore
         }
       }
-      this.emitStatus(t);
+      this.emitStatus(tracked);
     }, 0);
 
     // Set up the readiness watcher.
@@ -306,17 +359,69 @@ export class TaskRunner extends EventEmitter {
     tracked.readinessWatcher = watcher;
 
     void watcher.ready.then((ok) => {
-      const t = this.tracked.get(task.id);
-      if (!t) return;
-      t.ready = ok;
-      this.emitStatus(t);
+      if (this.tracked.get(task.id) !== tracked) return;
+      tracked.ready = ok;
+      this.emitStatus(tracked);
     });
 
+    // Readiness timeout: without a deadline a port that never opens or a regex that never
+    // matches leaves startApp blocked forever and the UI stuck on 'starting'
+    // (IMPROVEMENT-PLAN 7.2). On timeout, if the task is still alive we stop blocking and
+    // treat it as ready (so the spinner clears) rather than killing a healthy server.
+    //
+    // Deliberately NOT applied to 'exit' readiness (one-shots: migrations/builds - "ready"
+    // means the process FINISHED; forcing ready at 60s would start dependents before the
+    // prerequisite completed). For 'delay', honour the user's explicit wait even past the
+    // timeout (plus slack) rather than cutting it short.
+    const baseTimeout = this.settings?.get('readiness_timeout_ms') ?? 60_000;
+    const timeoutMs =
+      task.readiness.kind === 'exit'
+        ? 0
+        : task.readiness.kind === 'delay'
+          ? Math.max(baseTimeout, task.readiness.ms + 5000)
+          : baseTimeout;
+    const awaitReady: Promise<boolean> =
+      timeoutMs > 0
+        ? new Promise<boolean>((resolve) => {
+            let settled = false;
+            const finish = (v: boolean): void => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(to);
+              resolve(v);
+            };
+            const to = setTimeout(() => {
+              if (this.tracked.get(task.id) === tracked && tracked.state === 'running') {
+                console.warn(
+                  `[taskrunner] readiness timed out for "${task.name}" after ${timeoutMs}ms; treating as ready`
+                );
+                tracked.ready = true;
+                this.emitStatus(tracked);
+                finish(true);
+              } else {
+                finish(false);
+              }
+            }, timeoutMs);
+            void watcher.ready.then(finish);
+          })
+        : watcher.ready;
+
     this.emitStatus(tracked);
-    return { snapshot: toRunningTask(tracked), awaitReady: watcher.ready };
+    return { snapshot: toRunningTask(tracked), awaitReady };
   }
 
   async stop(taskId: TaskId): Promise<void> {
+    // A start() may still be mid-flight (awaiting env build, before tracked.set). Without
+    // waiting for it, this stop would silently no-op and the process would spawn anyway - 
+    // the user's click lost. Await the pending spawn, then stop the now-tracked run.
+    const inflight = this.pending.get(taskId);
+    if (inflight) {
+      try {
+        await inflight;
+      } catch {
+        // the start itself failed - nothing to stop
+      }
+    }
     const t = this.tracked.get(taskId);
     if (!t) return;
     if (t.state !== 'running' && t.state !== 'starting') return;
@@ -325,29 +430,80 @@ export class TaskRunner extends EventEmitter {
     t.state = 'exiting';
     this.emitStatus(t);
 
-    try {
-      t.pty.kill('SIGTERM');
-    } catch {
-      // ignore
-    }
-
     const grace = this.settings?.get('kill_grace_ms') ?? DEFAULT_KILL_GRACE_MS;
 
-    await new Promise<void>((resolve) => {
-      const escalate = setTimeout(() => {
-        treeKill(t.pid, 'SIGKILL', () => {});
-        resolve();
-      }, grace);
+    // Graceful: signal the WHOLE process tree, not just the PTY child. For `npm run dev`
+    // the real server is a grandchild, and a non-interactive `$SHELL -l -c` wrapper does not
+    // forward SIGTERM - so signalling only the pty child usually skips graceful shutdown
+    // (IMPROVEMENT-PLAN 7.1).
+    //
+    // All checks below are identity-aware (compare against THIS run's Tracked instance, not a
+    // by-id lookup): if a new run of the same task spawns mid-wait, "the old instance is gone
+    // from the map" means this stop is complete - it must never burn grace against, SIGKILL,
+    // or force-finalize the successor's healthy process.
+    this.signalTree(t.pid, 'SIGTERM');
+    await this.waitForExit(taskId, t, grace);
+    if (this.isRunExited(taskId, t)) return;
 
-      const tickUntilExit = setInterval(() => {
-        const cur = this.tracked.get(taskId);
-        if (!cur || cur.state === 'exited' || cur.state === 'crashed') {
-          clearTimeout(escalate);
-          clearInterval(tickUntilExit);
+    // Escalate: SIGKILL the tree, then wait a bounded window for the exit event to actually
+    // arrive before giving up - so 'exiting' is never a permanent dead-end.
+    this.signalTree(t.pid, 'SIGKILL');
+    await this.waitForExit(taskId, t, 2000);
+    if (this.isRunExited(taskId, t)) return;
+
+    // The OS never reported the exit - force the tracked entry to a terminal state so the UI
+    // and orchestrator don't hang on a zombie 'exiting'.
+    this.forceFinalize(taskId, t);
+  }
+
+  private signalTree(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void {
+    try {
+      treeKill(pid, signal, () => {});
+    } catch {
+      // process may already be gone
+    }
+  }
+
+  /** True when THIS run is finished - exited/crashed, or no longer the tracked entry. */
+  private isRunExited(taskId: TaskId, run: Tracked): boolean {
+    const cur = this.tracked.get(taskId);
+    if (cur !== run) return true; // replaced or torn down - the old run is gone
+    return cur.state === 'exited' || cur.state === 'crashed';
+  }
+
+  private async waitForExit(taskId: TaskId, run: Tracked, timeoutMs: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      const tick = setInterval(() => {
+        if (this.isRunExited(taskId, run) || Date.now() >= deadline) {
+          clearInterval(tick);
           resolve();
         }
       }, 100);
     });
+  }
+
+  /** Last-resort: SIGKILL+grace elapsed and no exit event arrived. Synthesise the teardown. */
+  private forceFinalize(taskId: TaskId, run: Tracked): void {
+    if (this.tracked.get(taskId) !== run) return; // a successor run owns the slot now
+    if (run.state === 'exited' || run.state === 'crashed') return;
+    // Mirror the normal onExit teardown so nothing leaks from this synthetic path.
+    this.flushLogEmit(run);
+    run.state = 'exited';
+    if (run.runId) {
+      this.history.finish(run.runId, {
+        exitCode: run.exitCode,
+        exitSignal: run.exitSignal ?? 'SIGKILL',
+        wasKilledByUser: true
+      });
+      run.runId = null;
+    }
+    run.readinessWatcher?.dispose();
+    this.emitStatus(run);
+    this.stats.untrack(taskId);
+    this.ports.untrack(taskId);
+    this.logs.markExited(taskId);
+    this.tracked.delete(taskId);
   }
 
   private queueLogEmit(t: Tracked, chunk: string): void {

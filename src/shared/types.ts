@@ -19,6 +19,8 @@ export interface App {
   customCommand: string | null;
   workingDir: string;
   autoRestartOnChange: boolean;
+  /** Start this app automatically when DevHarbor launches. */
+  autoStart: boolean;
   watchGlobs: string[];
   portHint: number | null;
   tags: string[];
@@ -112,6 +114,15 @@ export interface RunningTask {
   exitSignal: string | null;
 }
 
+export interface WorkspaceCandidate {
+  /** Package name (or directory name) of the workspace package. */
+  name: string;
+  /** Path relative to the repo root, e.g. "apps/api". */
+  relPath: string;
+  scripts: string[];
+  suggestedScript: string | null;
+}
+
 export interface DetectionResult {
   packageManager: PackageManager | null;
   nodeVersionFromProject: string | null;
@@ -119,6 +130,10 @@ export interface DetectionResult {
   hasEnvFile: boolean;
   envFiles: string[];
   suggestedDefaultScript: string | null;
+  /** False when the chosen folder has no package.json - the add flow warns instead of silently accepting. */
+  hasPackageJson: boolean;
+  /** Workspace packages found via pnpm-workspace.yaml / package.json "workspaces" (monorepo support). */
+  workspaces: WorkspaceCandidate[];
 }
 
 export interface NodeInstallation {

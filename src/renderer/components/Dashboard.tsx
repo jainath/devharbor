@@ -1,11 +1,13 @@
 import { memo, useMemo, useState } from 'react';
 import { Play, Square, FileText, Filter, ArrowDownUp, ArrowDownAZ, Clock, Check } from 'lucide-react';
-import type { App, AppId, ProcessState } from '@shared/types';
+import type { App, AppId, ProcessState, Task } from '@shared/types';
 import { useStore } from '../store/store';
 import { PortChip } from './PortChip';
 import { StatusDot } from './StatusDot';
 import { useContextMenu, type MenuItem } from './ContextMenu';
 import { sortApps, type AppSortMode } from '../lib/sortApps';
+import { isLive, isActive } from '../lib/processState';
+import { invokeOrToast } from '../lib/invoke';
 import { cn } from '../lib/cn';
 
 export function Dashboard(): JSX.Element {
@@ -29,19 +31,16 @@ export function Dashboard(): JSX.Element {
     return [...s].sort((a, b) => a.localeCompare(b));
   }, [apps]);
 
-  // Sort shared with the Sidebar (store). Default 'name' is stable — cards don't reorder on
+  // Sort shared with the Sidebar (store). Default 'name' is stable - cards don't reorder on
   // state changes, so the click target stays put. 'running'/'recent' are explicit opt-ins.
-  const sortedApps = useMemo(() => {
-    const isRunning = (id: string): boolean => {
-      const st = appState[id];
-      return st === 'running' || st === 'starting' || st === 'exiting';
-    };
-    return sortApps(apps, sortMode, isRunning);
-  }, [apps, sortMode, appState]);
+  const sortedApps = useMemo(
+    () => sortApps(apps, sortMode, (id) => isLive(appState[id])),
+    [apps, sortMode, appState]
+  );
 
   const openSortMenu = (e: React.MouseEvent): void => {
     const opts: { mode: AppSortMode; label: string; icon: JSX.Element }[] = [
-      { mode: 'name', label: 'Name (A–Z)', icon: <ArrowDownAZ className="h-3.5 w-3.5" /> },
+      { mode: 'name', label: 'Name (A-Z)', icon: <ArrowDownAZ className="h-3.5 w-3.5" /> },
       { mode: 'recent', label: 'Recently used', icon: <Clock className="h-3.5 w-3.5" /> },
       { mode: 'running', label: 'Running first', icon: <Play className="h-3.5 w-3.5" /> }
     ];
@@ -61,15 +60,11 @@ export function Dashboard(): JSX.Element {
   );
 
   const running = useMemo(
-    () =>
-      visibleApps.filter((a) => {
-        const st = appState[a.id];
-        return st === 'running' || st === 'starting' || st === 'exiting';
-      }),
+    () => visibleApps.filter((a) => isLive(appState[a.id])),
     [visibleApps, appState]
   );
 
-  // Machine-wide aggregate across all running tasks — the dashboard's unique value
+  // Machine-wide aggregate across all running tasks - the dashboard's unique value
   // versus the sidebar (which only navigates). "How much is my machine doing right now."
   const aggregate = useMemo(() => {
     let cpu = 0;
@@ -77,8 +72,7 @@ export function Dashboard(): JSX.Element {
     let ports = 0;
     for (const a of visibleApps) {
       for (const t of tasksByApp[a.id] ?? []) {
-        const st = taskState[t.id] ?? 'idle';
-        if (st === 'running' || st === 'starting') {
+        if (isActive(taskState[t.id])) {
           cpu += taskCpu[t.id] ?? 0;
           mem += taskMemMB[t.id] ?? 0;
           ports += (taskPorts[t.id] ?? []).length;
@@ -88,8 +82,24 @@ export function Dashboard(): JSX.Element {
     return { cpu, mem, ports };
   }, [visibleApps, tasksByApp, taskState, taskCpu, taskMemMB, taskPorts]);
 
+  // Hoist the per-app task sort out of the per-tick render path. It depends only on the task
+  // registry (tasksByApp) - the names/order don't change on a 1Hz stats tick - so without this
+  // memo every card would re-run [...tasks].sort() each second. Keyed on tasksByApp alone keeps
+  // the sort cold while CPU/mem/port numbers churn.
+  const orderedTasksByApp = useMemo(() => {
+    const out: Record<string, Task[]> = {};
+    for (const id of Object.keys(tasksByApp)) {
+      out[id] = [...(tasksByApp[id] ?? [])]
+        .filter((t) => t.enabled)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return out;
+  }, [tasksByApp]);
+
   const stopAll = async (): Promise<void> => {
-    await Promise.all(running.map((a) => window.api.invoke('proc:stop', { id: a.id })));
+    await Promise.all(
+      running.map((a) => invokeOrToast('proc:stop', { id: a.id }, { context: 'Stop failed' }))
+    );
   };
 
   return (
@@ -126,9 +136,9 @@ export function Dashboard(): JSX.Element {
           )}
           <button
             onClick={openSortMenu}
-            title={`Sort apps — ${
+            title={`Sort apps - ${
               sortMode === 'name'
-                ? 'Name (A–Z)'
+                ? 'Name (A-Z)'
                 : sortMode === 'recent'
                   ? 'Recently used'
                   : 'Running first'
@@ -163,7 +173,7 @@ export function Dashboard(): JSX.Element {
           </div>
         ) : (
           <>
-            {/* Aggregate stat strip — the dashboard's "control room" identity: a glance
+            {/* Aggregate stat strip - the dashboard's "control room" identity: a glance
                 at total machine load that the (navigation-only) sidebar can't provide. */}
             <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <StatTile
@@ -175,42 +185,37 @@ export function Dashboard(): JSX.Element {
               <StatTile label="Memory" value={formatMem(aggregate.mem)} />
               <StatTile
                 label="Open ports"
-                value={aggregate.ports === 0 ? '—' : String(aggregate.ports)}
+                value={aggregate.ports === 0 ? '-' : String(aggregate.ports)}
               />
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {visibleApps.map((app) => {
               const tasks = tasksByApp[app.id] ?? [];
+              const orderedTasks = orderedTasksByApp[app.id] ?? [];
               const state = appState[app.id] ?? 'idle';
-              const runningTasks = tasks.filter(
-                (t) => (taskState[t.id] ?? 'idle') === 'running' || taskState[t.id] === 'starting'
-              );
+              const runningTasks = orderedTasks.filter((t) => isActive(taskState[t.id]));
               const totalCpu = runningTasks.reduce((s, t) => s + (taskCpu[t.id] ?? 0), 0);
               const totalMem = runningTasks.reduce((s, t) => s + (taskMemMB[t.id] ?? 0), 0);
               // One entry per **registered** task (not just running) so the card height
               // is invariant across start/stop. Running tasks show their detected port;
-              // idle / not-yet-bound tasks show a muted "—" placeholder. Multi-port
-              // tasks fan out into separate chips. Stable order: by task name.
+              // idle / not-yet-bound tasks show a muted "-" placeholder. Multi-port
+              // tasks fan out into separate chips. Iterates the pre-sorted orderedTasks
+              // (sort is hoisted into orderedTasksByApp, off the per-tick path).
               const taskPortEntries: {
                 taskId: string;
                 taskName: string;
                 port: number | null;
                 running: boolean;
               }[] = [];
-              const orderedTasks = [...tasks]
-                .filter((t) => t.enabled)
-                .sort((a, b) => a.name.localeCompare(b.name));
               for (const t of orderedTasks) {
-                const isRunning =
-                  (taskState[t.id] ?? 'idle') === 'running' ||
-                  taskState[t.id] === 'starting';
-                const ports = isRunning ? taskPorts[t.id] ?? [] : [];
+                const active = isActive(taskState[t.id]);
+                const ports = active ? taskPorts[t.id] ?? [] : [];
                 if (ports.length === 0) {
                   taskPortEntries.push({
                     taskId: t.id,
                     taskName: t.name,
                     port: null,
-                    running: isRunning
+                    running: active
                   });
                 } else {
                   for (const p of [...ports].sort((a, b) => a - b)) {
@@ -218,7 +223,7 @@ export function Dashboard(): JSX.Element {
                       taskId: t.id,
                       taskName: t.name,
                       port: p,
-                      running: isRunning
+                      running: active
                     });
                   }
                 }
@@ -234,8 +239,12 @@ export function Dashboard(): JSX.Element {
                   memMB={totalMem}
                   taskPortEntries={taskPortEntries}
                   onOpen={() => setSelected(app.id as AppId)}
-                  onStart={() => void window.api.invoke('proc:start', { id: app.id })}
-                  onStop={() => void window.api.invoke('proc:stop', { id: app.id })}
+                  onStart={() =>
+                    void invokeOrToast('proc:start', { id: app.id }, { context: 'Start failed' })
+                  }
+                  onStop={() =>
+                    void invokeOrToast('proc:stop', { id: app.id }, { context: 'Stop failed' })
+                  }
                 />
               );
             })}
@@ -268,7 +277,7 @@ function portsKey(entries: AppCardProps['taskPortEntries']): string {
 /**
  * Memoized so idle cards don't re-render on every ~1Hz stats tick (Dashboard re-runs each
  * tick because it subscribes to taskCpu/taskMemMB/taskPorts). The handlers are recreated
- * each render but are intentionally excluded from the comparison — they only close over the
+ * each render but are intentionally excluded from the comparison - they only close over the
  * stable app.id, so a card re-renders only when its own data actually changes.
  */
 const AppCard = memo(
@@ -295,33 +304,34 @@ function AppCardImpl({
   onStart,
   onStop
 }: AppCardProps): JSX.Element {
-  const isLive = state === 'running' || state === 'starting' || state === 'exiting';
+  const live = isLive(state);
   return (
     // Card sizes to content. Port chips always render (one per registered task) so cards
     // with the same task count align. Running apps get an inset teal left edge + lifted
-    // surface — emphasis in place, NO reorder (keeps click targets put), NO layout shift
+    // surface - emphasis in place, NO reorder (keeps click targets put), NO layout shift
     // (inset box-shadow doesn't affect geometry).
     <div
       className={cn(
         'group flex flex-col rounded-md border p-3 transition-colors',
-        isLive
+        live
           ? 'border-border-strong bg-surface/60 shadow-[inset_2px_0_0_0_rgb(var(--accent))]'
           : 'border-border bg-base/50 hover:border-border-strong'
       )}
     >
       <div className="flex items-center gap-2">
-        {/* Single status dot (green+glow when running, muted otherwise) — replaces the
+        {/* Single status dot (green+glow when running, muted otherwise) - replaces the
             old color-identity dot + separate status dot. Matches the UI reference. */}
         <StatusDot state={state} />
         <button
           onClick={onOpen}
-          className="text-sm font-medium text-fg hover:underline"
+          title={app.name}
+          className="min-w-0 flex-1 truncate text-left text-sm font-medium text-fg hover:underline"
         >
           {app.name}
         </button>
         <span
           className={cn(
-            'ml-auto font-mono text-[10px] uppercase tracking-wider',
+            'shrink-0 font-mono text-[10px] uppercase tracking-wider',
             state === 'running' ? 'text-success-strong' : 'text-fg-subtle'
           )}
         >
@@ -359,7 +369,7 @@ function AppCardImpl({
         )}
       </div>
       <div className="mt-3 flex items-center gap-1">
-        {!isLive ? (
+        {!live ? (
           <button
             onClick={onStart}
             title="Start all tasks in this app"

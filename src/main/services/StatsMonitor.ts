@@ -23,6 +23,7 @@ export class StatsMonitor extends EventEmitter {
   private readonly tracked = new Map<TaskId, Tracked>();
   private timer: NodeJS.Timeout | null = null;
   private intervalMs: number;
+  private inFlight = false;
 
   constructor(intervalMs = 1000) {
     super();
@@ -60,27 +61,45 @@ export class StatsMonitor extends EventEmitter {
   }
 
   private async tick(): Promise<void> {
-    if (this.tracked.size === 0) return;
-    const entries = [...this.tracked.values()];
-    const results = await Promise.all(
-      entries.map(async (t) => {
-        try {
-          const stats = await pidusage(t.pid);
-          return { t, cpu: stats.cpu, memMB: Math.round(stats.memory / (1024 * 1024)) };
-        } catch {
-          // Process exited between ticks — drop silently; the runner's onExit will untrack.
-          return null;
-        }
-      })
-    );
-    for (const r of results) {
-      if (!r) continue;
-      this.emit('stats', {
-        taskId: r.t.taskId,
-        appId: r.t.appId,
-        cpu: Math.max(0, r.cpu),
-        memMB: r.memMB
-      } satisfies StatsTick);
+    if (this.tracked.size === 0 || this.inFlight) return;
+    this.inFlight = true;
+    try {
+      const entries = [...this.tracked.values()];
+      const pids = entries.map((e) => e.pid);
+
+      // ONE `ps` for all tracked pids instead of one fork per task per tick (pidusage
+      // comma-joins an array into a single ps call). With 10 running tasks this turns 10
+      // fork+exec per second into 1 (IMPROVEMENT-PLAN 9.2).
+      let byPid: Record<number, { cpu: number; memory: number }> = {};
+      try {
+        byPid = (await pidusage(pids)) as Record<number, { cpu: number; memory: number }>;
+      } catch {
+        // pidusage rejects the WHOLE batch if any pid vanished mid-tick - fall back to
+        // per-pid so the survivors still report (the runner's onExit untracks the dead one).
+        await Promise.all(
+          entries.map(async (e) => {
+            try {
+              const s = await pidusage(e.pid);
+              byPid[e.pid] = { cpu: s.cpu, memory: s.memory };
+            } catch {
+              // process gone - skip
+            }
+          })
+        );
+      }
+
+      for (const e of entries) {
+        const s = byPid[e.pid];
+        if (!s) continue;
+        this.emit('stats', {
+          taskId: e.taskId,
+          appId: e.appId,
+          cpu: Math.max(0, s.cpu),
+          memMB: Math.round(s.memory / (1024 * 1024))
+        } satisfies StatsTick);
+      }
+    } finally {
+      this.inFlight = false;
     }
   }
 

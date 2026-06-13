@@ -6,6 +6,12 @@ export type SettingsMap = {
   auto_update: boolean;
   theme: 'light' | 'dark' | 'system';
   dashboard_refresh_ms: number;
+  notify_on_crash: boolean;
+  notify_on_ready: boolean;
+  launch_at_login: boolean;
+  tray_enabled: boolean;
+  run_history_limit: number;
+  readiness_timeout_ms: number;
 };
 
 const DEFAULTS: SettingsMap = {
@@ -13,7 +19,13 @@ const DEFAULTS: SettingsMap = {
   kill_grace_ms: 5000,
   auto_update: true,
   theme: 'system',
-  dashboard_refresh_ms: 1000
+  dashboard_refresh_ms: 1000,
+  notify_on_crash: true,
+  notify_on_ready: false,
+  launch_at_login: false,
+  tray_enabled: true,
+  run_history_limit: 500,
+  readiness_timeout_ms: 60_000
 };
 
 export class Settings {
@@ -27,7 +39,13 @@ export class Settings {
       kill_grace_ms: parseNumber(map.get('kill_grace_ms'), DEFAULTS.kill_grace_ms),
       auto_update: parseBool(map.get('auto_update'), DEFAULTS.auto_update),
       theme: parseTheme(map.get('theme')),
-      dashboard_refresh_ms: parseNumber(map.get('dashboard_refresh_ms'), DEFAULTS.dashboard_refresh_ms)
+      dashboard_refresh_ms: parseNumber(map.get('dashboard_refresh_ms'), DEFAULTS.dashboard_refresh_ms),
+      notify_on_crash: parseBool(map.get('notify_on_crash'), DEFAULTS.notify_on_crash),
+      notify_on_ready: parseBool(map.get('notify_on_ready'), DEFAULTS.notify_on_ready),
+      launch_at_login: parseBool(map.get('launch_at_login'), DEFAULTS.launch_at_login),
+      tray_enabled: parseBool(map.get('tray_enabled'), DEFAULTS.tray_enabled),
+      run_history_limit: parseNumber(map.get('run_history_limit'), DEFAULTS.run_history_limit),
+      readiness_timeout_ms: parseNumber(map.get('readiness_timeout_ms'), DEFAULTS.readiness_timeout_ms)
     };
   }
 
@@ -51,7 +69,13 @@ export class Settings {
       'kill_grace_ms',
       'auto_update',
       'theme',
-      'dashboard_refresh_ms'
+      'dashboard_refresh_ms',
+      'notify_on_crash',
+      'notify_on_ready',
+      'launch_at_login',
+      'tray_enabled',
+      'run_history_limit',
+      'readiness_timeout_ms'
     ]);
     const tx = db().transaction(() => {
       for (const [k, v] of Object.entries(patch)) {

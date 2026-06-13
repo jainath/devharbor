@@ -90,6 +90,39 @@ export class RunHistory {
       .all(appId, limit);
     return rows.map(toRow);
   }
+
+  /**
+   * Trim run_history to the most recent `perAppLimit` rows per app.
+   *
+   * WHY: nothing else ever deletes from run_history, and with
+   * restart-on-change a single app can append hundreds of rows/day. Left
+   * unchecked the table grows without bound, bloating the DB and slowing
+   * list() queries. Pruning per app_id (rather than a global cap) keeps a
+   * usable window of history for every app regardless of how active others
+   * are. The DELETE runs as one statement so it stays atomic and cheap to
+   * call once on boot.
+   *
+   * A non-positive limit is treated as "no cap" and is a no-op - we never
+   * want a misconfigured setting to wipe the entire table.
+   */
+  prune(perAppLimit: number): void {
+    if (perAppLimit <= 0) return;
+    db()
+      .prepare(
+        `DELETE FROM run_history
+         WHERE id NOT IN (
+           SELECT id FROM (
+             SELECT id,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY app_id ORDER BY started_at DESC
+                    ) AS rn
+             FROM run_history
+           )
+           WHERE rn <= ?
+         )`
+      )
+      .run(perAppLimit);
+  }
 }
 
 function toRow(r: DbRow): RunHistoryRow {
