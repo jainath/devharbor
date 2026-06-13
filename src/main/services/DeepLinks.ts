@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron';
+import { realpathSync } from 'node:fs';
 import type { AppRegistry } from './AppRegistry';
 import type { AppOrchestrator } from './AppOrchestrator';
 import type { AppId } from '@shared/types';
@@ -14,7 +15,7 @@ const PROTOCOL = 'devharbor';
  *                                            can offer to register it).
  *   - devharbor://open?id=<appId>         → focus by id
  *   - devharbor://start?id=<appId>        → focus the app and ask the renderer to CONFIRM
- *                                            starting it (never starts silently — a link
+ *                                            starting it (never starts silently - a link
  *                                            from any web page must not run shell commands
  *                                            without the user's consent)
  *
@@ -73,11 +74,18 @@ export class DeepLinks {
         }
       }
       if (path) {
-        const existing = this.registry.getByPath(path);
+        // Registered apps store their realpath'd, canonical path (AppRegistry.add →
+        // normalisePath → realpathSync), so a symlinked or otherwise non-canonical path
+        // from the URL would never match an existing entry on a raw string compare. Resolve
+        // it the same way before the lookup. If the path doesn't exist on disk, realpathSync
+        // throws - fall back to the raw value, which simply won't match and proceeds to the
+        // unknownPath branch exactly as before.
+        const canonicalPath = this.canonicalise(path);
+        const existing = this.registry.getByPath(canonicalPath);
         if (existing) {
           win.webContents.send('deepLink:focusApp', { appId: existing.id });
         } else {
-          win.webContents.send('deepLink:unknownPath', { path });
+          win.webContents.send('deepLink:unknownPath', { path: canonicalPath });
         }
       }
     } else if (host === 'start') {
@@ -91,6 +99,20 @@ export class DeepLinks {
           win.webContents.send('deepLink:confirmStart', { appId: a.id, appName: a.name });
         }
       }
+    }
+  }
+
+  /**
+   * Resolve a filesystem path to its canonical (symlink-free) form so it can be compared
+   * against the realpath'd paths stored in the registry. Wrapped in try/catch because the
+   * path may not exist on disk - in that case we keep the raw value, which won't match any
+   * registered app and falls through to the unknownPath flow, preserving prior behaviour.
+   */
+  private canonicalise(path: string): string {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
     }
   }
 }

@@ -4,9 +4,15 @@ import type { NodeInstallation } from '@shared/types';
 import type { SettingsState } from '@shared/ipc';
 import { ErrorBanner } from './ErrorBanner';
 import { openConfirm } from './PromptModal';
+import { useDialog } from '../hooks/useDialog';
 import { cn } from '../lib/cn';
 
+/** id linking the dialog panel (aria-labelledby) to its visible heading for screen readers. */
+const SETTINGS_TITLE_ID = 'settings-drawer-title';
+
 export function SettingsDrawer({ onClose }: { onClose: () => void }): JSX.Element {
+  // Focus trap / Escape-to-close / focus-restore + role=dialog/aria-modal/aria-labelledby.
+  const { dialogProps } = useDialog(onClose, SETTINGS_TITLE_ID);
   const [settings, setSettings] = useState<SettingsState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nodeInstalls, setNodeInstalls] = useState<NodeInstallation[]>([]);
@@ -33,9 +39,14 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }): JSX.Elemen
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
-      <div className="flex h-full max-h-[680px] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-base shadow-2xl">
+      <div
+        {...dialogProps}
+        className="flex h-full max-h-[680px] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-base shadow-2xl"
+      >
         <header className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-sm font-medium text-fg">Settings</h2>
+          <h2 id={SETTINGS_TITLE_ID} className="text-sm font-medium text-fg">
+            Settings
+          </h2>
           <button
             onClick={onClose}
             className="rounded-md p-1 text-fg-subtle hover:bg-surface hover:text-fg"
@@ -62,6 +73,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }): JSX.Elemen
               <Section title="General">
                 <Field label="Theme" description="Color scheme for the UI.">
                   <select
+                    data-autofocus
                     value={settings.theme}
                     onChange={(e) =>
                       void update({ theme: e.target.value as SettingsState['theme'] })
@@ -78,6 +90,33 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }): JSX.Elemen
                   description="Automatically download and install new DevHarbor releases."
                   checked={settings.auto_update}
                   onChange={(v) => void update({ auto_update: v })}
+                />
+                <Toggle
+                  label="Launch DevHarbor at login"
+                  description="Start DevHarbor automatically when you log in to your Mac."
+                  checked={settings.launch_at_login}
+                  onChange={(v) => void update({ launch_at_login: v })}
+                />
+                <Toggle
+                  label="Show menubar icon"
+                  description="Keep a tray icon in the macOS menubar for quick access and background control."
+                  checked={settings.tray_enabled}
+                  onChange={(v) => void update({ tray_enabled: v })}
+                />
+              </Section>
+
+              <Section title="Notifications">
+                <Toggle
+                  label="Notify when an app crashes"
+                  description="Show a desktop notification when a task exits unexpectedly while DevHarbor is backgrounded."
+                  checked={settings.notify_on_crash}
+                  onChange={(v) => void update({ notify_on_crash: v })}
+                />
+                <Toggle
+                  label="Notify when an app is ready"
+                  description="Show a desktop notification when an app finishes starting (readiness reached)."
+                  checked={settings.notify_on_ready}
+                  onChange={(v) => void update({ notify_on_ready: v })}
                 />
               </Section>
 
@@ -111,6 +150,19 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }): JSX.Elemen
                     max={100000}
                   />
                 </Field>
+                <Field
+                  label="Keep run history per app"
+                  description="Maximum run_history rows retained per app. Older rows are pruned on boot."
+                >
+                  <NumberInput
+                    value={settings.run_history_limit}
+                    onCommit={(v) => void update({ run_history_limit: clamp(v, 10, 10000) })}
+                    suffix="runs"
+                    step={50}
+                    min={10}
+                    max={10000}
+                  />
+                </Field>
               </Section>
 
               <Section title="Processes">
@@ -127,11 +179,24 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }): JSX.Elemen
                     max={30000}
                   />
                 </Field>
+                <Field
+                  label="Readiness timeout"
+                  description="Abort a task's start if its readiness signal hasn't fired within this many ms."
+                >
+                  <NumberInput
+                    value={settings.readiness_timeout_ms}
+                    onCommit={(v) => void update({ readiness_timeout_ms: clamp(v, 1000, 600000) })}
+                    suffix="ms"
+                    step={1000}
+                    min={1000}
+                    max={600000}
+                  />
+                </Field>
               </Section>
 
               <Section title="Node detection">
                 <div className="text-[11px] text-fg-subtle">
-                  Installations discovered on this machine (read-only — the list is rescanned every
+                  Installations discovered on this machine (read-only - the list is rescanned every
                   time an app starts). To add a new version, install it via your usual manager
                   (nvm / fnm / volta / asdf) and click an app's Start.
                 </div>

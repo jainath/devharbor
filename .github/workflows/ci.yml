@@ -1,0 +1,54 @@
+name: CI
+
+# Typecheck + tests on every push to main and every PR. Until now the only workflow was the
+# tag-triggered release, so build/test rot (or a contributor's broken PR) was only discovered
+# during a signed release run (IMPROVEMENT-PLAN 12.1). CONTRIBUTING.md promises `pnpm test`
+# must pass before merge - this enforces it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # macOS matches the release runner so the better-sqlite3 / node-pty electron-rebuild
+    # postinstall is exercised the same way it will be at release time.
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python 3.11 (node-gyp needs distutils)
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test

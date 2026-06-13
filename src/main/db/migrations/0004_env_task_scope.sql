@@ -2,7 +2,7 @@
 --
 -- Add `task_id` to env_vars so the three-scope layering (global / app / task)
 -- can be done with one table and one query per scope. NULL means "not scoped
--- to a specific task" — combined with `app_id` it gives:
+-- to a specific task" - combined with `app_id` it gives:
 --    app_id IS NULL AND task_id IS NULL  → global
 --    app_id = ?      AND task_id IS NULL  → app
 --    task_id = ?                          → task  (app_id denormalised for cascade)

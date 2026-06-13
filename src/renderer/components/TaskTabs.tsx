@@ -1,9 +1,35 @@
-import { Play, Square, RotateCw, EyeOff, Eye, Edit3, KeyRound, Trash2 } from 'lucide-react';
+import {
+  Play,
+  Square,
+  RotateCw,
+  EyeOff,
+  Eye,
+  Edit3,
+  KeyRound,
+  Trash2,
+  MoreVertical
+} from 'lucide-react';
 import type { AppId, ProcessState, ReadinessSignal, Task, TaskId } from '@shared/types';
 import { useStore } from '../store/store';
 import { cn } from '../lib/cn';
+import { isLive } from '../lib/processState';
+import { invokeOrToast } from '../lib/invoke';
 import { useContextMenu, type MenuItem } from './ContextMenu';
 import { openConfirm } from './PromptModal';
+
+/**
+ * Start a task and reflect the running record in the store, surfacing any rejection as a toast.
+ * Shared by the tab strip's start button and the context menu's Start/Restart so all three
+ * routes report failures identically (5.5) and the store is only updated on success.
+ */
+async function startTask(id: TaskId, context = 'Start failed'): Promise<void> {
+  const rt = await invokeOrToast('task:start', { id }, { context });
+  if (!rt) return;
+  useStore.setState((s) => ({
+    runningTasks: { ...s.runningTasks, [rt.taskId]: rt },
+    taskState: { ...s.taskState, [rt.taskId]: rt.state }
+  }));
+}
 
 export function TaskTabs({
   appId,
@@ -26,35 +52,31 @@ export function TaskTabs({
   const { open: openMenu, node: menuNode } = useContextMenu();
 
   const buildItems = (task: Task): MenuItem[] => {
-    const st = taskState[task.id];
-    const isLive = st === 'running' || st === 'starting' || st === 'exiting';
+    const live = isLive(taskState[task.id]);
     return [
       {
-        label: isLive ? 'Stop this task' : 'Start this task',
-        icon: isLive ? <Square className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />,
+        label: live ? 'Stop this task' : 'Start this task',
+        icon: live ? <Square className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />,
         onSelect: async () => {
-          if (isLive) await window.api.invoke('task:stop', { id: task.id });
-          else {
-            const rt = await window.api.invoke('task:start', { id: task.id });
-            useStore.setState((s) => ({
-              runningTasks: { ...s.runningTasks, [rt.taskId]: rt },
-              taskState: { ...s.taskState, [rt.taskId]: rt.state }
-            }));
-          }
+          if (live) await invokeOrToast('task:stop', { id: task.id }, { context: 'Stop failed' });
+          else await startTask(task.id);
         }
       },
       {
         label: 'Restart this task',
         icon: <RotateCw className="h-3.5 w-3.5" />,
-        disabled: !isLive,
+        disabled: !live,
         onSelect: async () => {
-          await window.api.invoke('task:stop', { id: task.id });
-          setTimeout(async () => {
-            const rt = await window.api.invoke('task:start', { id: task.id });
-            useStore.setState((s) => ({
-              runningTasks: { ...s.runningTasks, [rt.taskId]: rt },
-              taskState: { ...s.taskState, [rt.taskId]: rt.state }
-            }));
+          const stopped = await invokeOrToast(
+            'task:stop',
+            { id: task.id },
+            { context: 'Restart failed' }
+          );
+          // Only proceed to the start half once the stop actually resolved, so a failed stop
+          // doesn't silently spawn a duplicate process via the timer.
+          if (stopped === null) return;
+          setTimeout(() => {
+            void startTask(task.id, 'Restart failed');
           }, 150);
         }
       },
@@ -66,7 +88,7 @@ export function TaskTabs({
           <Eye className="h-3.5 w-3.5" />
         ),
         separatorBefore: true,
-        disabled: isLive,
+        disabled: live,
         onSelect: async () => {
           const next = await window.api.invoke('tasks:update', {
             id: task.id,
@@ -94,7 +116,7 @@ export function TaskTabs({
         icon: <Trash2 className="h-3.5 w-3.5" />,
         danger: true,
         separatorBefore: true,
-        disabled: isLive,
+        disabled: live,
         onSelect: async () => {
           const ok = await openConfirm({
             title: `Remove task "${task.name}"?`,
@@ -125,7 +147,7 @@ export function TaskTabs({
             state={taskState[t.id]}
             ready={!!taskReady[t.id]}
             onClick={() => selectTaskTab(appId, t.id)}
-            onContextMenu={(e) => openMenu(e, buildItems(t))}
+            onOpenMenu={(e) => openMenu(e, buildItems(t))}
           />
         ))}
       </div>
@@ -146,68 +168,82 @@ function TaskTab({
   state,
   ready,
   onClick,
-  onContextMenu
+  onOpenMenu
 }: {
   task: Task;
   active: boolean;
   state: ProcessState | undefined;
   ready: boolean;
   onClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  /** Opens the per-task action menu at the pointer; used by both right-click and the ⋮ button. */
+  onOpenMenu: (e: React.MouseEvent) => void;
 }): JSX.Element {
-  const isLive = state === 'running' || state === 'starting' || state === 'exiting';
+  const live = isLive(state);
+  // Prefer the semantic status tokens; the oneShot-exited "info" case has no semantic dot token,
+  // so it falls back to the accent colour rather than the old raw bg-blue-500.
   const stateColor = !task.enabled
     ? 'bg-border-strong/50'
     : state === 'crashed'
-    ? 'bg-red-500'
+    ? 'bg-danger-strong'
     : state === 'starting' || state === 'exiting'
-    ? 'bg-amber-500'
+    ? 'bg-warn-strong'
     : state === 'running' && ready
-    ? 'bg-green-500'
+    ? 'bg-success-strong'
     : state === 'running'
-    ? 'bg-amber-500'
+    ? 'bg-warn-strong'
     : task.oneShot && state === 'exited'
-    ? 'bg-blue-500'
+    ? 'bg-accent'
     : 'bg-fg-subtle';
 
-  const startStop = async (e: React.MouseEvent): Promise<void> => {
+  const toggle = (e: React.MouseEvent): void => {
     e.stopPropagation();
-    if (isLive) {
-      await window.api.invoke('task:stop', { id: task.id });
-    } else {
-      const rt = await window.api.invoke('task:start', { id: task.id });
-      useStore.setState((s) => ({
-        runningTasks: { ...s.runningTasks, [rt.taskId]: rt },
-        taskState: { ...s.taskState, [rt.taskId]: rt.state }
-      }));
-    }
+    if (live) void invokeOrToast('task:stop', { id: task.id }, { context: 'Stop failed' });
+    else void startTask(task.id);
   };
 
+  // A group of sibling controls - no nested interactive elements. Right-click anywhere on the
+  // group opens the action menu; the ⋮ button exposes the same menu without a mouse.
   return (
-    <button
-      onClick={onClick}
-      onContextMenu={onContextMenu}
+    <div
+      onContextMenu={onOpenMenu}
       className={cn(
-        'group flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs',
+        'group flex items-center gap-1.5 rounded-md border px-1 py-0.5 text-xs',
         active
           ? 'border-border-strong bg-surface text-fg'
           : 'border-transparent text-fg-muted hover:bg-surface/60 hover:text-fg',
         !task.enabled && 'opacity-50'
       )}
-      title={tooltipFor(task)}
     >
-      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', stateColor)} />
-      <span className="font-medium">{task.name}</span>
-      <span className="text-[10px] text-fg-subtle">{readinessLabel(task.readiness)}</span>
-      <span
-        role="button"
-        onClick={(e) => void startStop(e)}
-        className="ml-1 rounded p-0.5 text-fg-subtle hover:bg-elevated hover:text-fg"
-        title={isLive ? 'Stop task' : 'Start task'}
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex items-center gap-1.5 rounded px-1 py-0.5"
+        title={tooltipFor(task)}
+        aria-pressed={active}
       >
-        {isLive ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-      </span>
-    </button>
+        <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', stateColor)} />
+        <span className="font-medium">{task.name}</span>
+        <span className="text-[10px] text-fg-subtle">{readinessLabel(task.readiness)}</span>
+      </button>
+      <button
+        type="button"
+        onClick={toggle}
+        className="rounded p-0.5 text-fg-subtle hover:bg-elevated hover:text-fg"
+        aria-label={live ? `Stop ${task.name}` : `Start ${task.name}`}
+        title={live ? 'Stop task' : 'Start task'}
+      >
+        {live ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+      </button>
+      <button
+        type="button"
+        onClick={onOpenMenu}
+        className="rounded p-0.5 text-fg-subtle hover:bg-elevated hover:text-fg"
+        aria-label={`More actions for ${task.name}`}
+        title="More actions"
+      >
+        <MoreVertical className="h-3 w-3" />
+      </button>
+    </div>
   );
 }
 

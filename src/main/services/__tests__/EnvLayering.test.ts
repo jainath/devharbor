@@ -1,155 +1,149 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { App, AppId, EnvVar, Task, TaskId } from '@shared/types';
+import { EnvBuilder } from '../EnvBuilder';
 
 /**
- * Mirrors the layering performed inside EnvBuilder.build():
- *   process < global < app < task < .env  (later wins)
+ * Exercises the REAL EnvBuilder.build() (not a pure-function mirror - the old version of this
+ * file re-implemented the layering and silently kept asserting the pre-hardening precedence).
  *
- * This is replicated as a pure function here (same pattern as PortDetector.test.ts) —
- * any change to EnvBuilder's order must also change this test, surfacing the diff.
+ * Shipped precedence (later wins) - IMPROVEMENT-PLAN 6.1:
+ *   sanitized base < computed PATH < project .env files < global < app < task < FORCE_COLOR/TERM
  *
- * See specs/03-features.md F6 and specs/02-data-model.md "Scope layering".
+ * Key inversions vs the old behavior, asserted here:
+ *   - USER-configured env_vars now override project .env files (UI is the source of truth).
+ *   - A project .env can never set process-control keys (PATH, NODE_OPTIONS, DYLD_*, …).
+ *
+ * EnvBuilder's EnvStore/PathProbe deps are type-only imports, so plain stubs work - no
+ * better-sqlite3 needed. The .env files are real files in a temp dir.
  */
-type EnvRow = { key: string; value: string; enabled: boolean };
 
-function layer(
-  base: Record<string, string>,
-  rows: EnvRow[]
-): Record<string, string> {
-  const out: Record<string, string> = { ...base };
-  for (const r of rows) {
-    if (!r.enabled || !r.key) continue;
-    out[r.key] = r.value;
-  }
-  return out;
+const row = (key: string, value: string, enabled = true): EnvVar => ({
+  id: key,
+  appId: null,
+  key,
+  value,
+  enabled,
+  isSecret: false
+});
+
+function makeBuilder(scopes: { global?: EnvVar[]; app?: EnvVar[]; task?: EnvVar[] }): EnvBuilder {
+  const envStore = {
+    getGlobal: () => scopes.global ?? [],
+    getApp: (_id: AppId) => scopes.app ?? [],
+    getTask: (_id: TaskId) => scopes.task ?? []
+  };
+  const pathProbe = { get: async () => '/probe/bin:/usr/bin' };
+  // Type-only constructor params - structural stubs are sufficient.
+  return new EnvBuilder(envStore as never, pathProbe as never);
 }
 
-function buildEffective(args: {
-  processEnv: Record<string, string>;
-  global: EnvRow[];
-  app: EnvRow[];
-  task: EnvRow[];
-  dotEnv: Record<string, string>;
-}): Record<string, string> {
-  let env = { ...args.processEnv };
-  env = layer(env, args.global);
-  env = layer(env, args.app);
-  env = layer(env, args.task);
-  env = { ...env, ...args.dotEnv };
-  return env;
-}
+const app = { id: 'a1' as AppId } as App;
+const task = { id: 't1' as TaskId } as Task;
 
-describe('env layering (3-scope, Phase 7)', () => {
-  it('global value wins when no app or task override', () => {
-    const env = buildEffective({
-      processEnv: {},
-      global: [{ key: 'DEBUG', value: 'app:*', enabled: true }],
-      app: [],
-      task: [],
-      dotEnv: {}
-    });
-    expect(env.DEBUG).toBe('app:*');
+let cwd: string;
+beforeAll(() => {
+  cwd = mkdtempSync(join(tmpdir(), 'envlayer-'));
+});
+afterAll(() => {
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+const build = (
+  b: EnvBuilder,
+  opts?: { withTask?: boolean; dir?: string }
+): Promise<Record<string, string>> =>
+  b.build({
+    app,
+    task: opts?.withTask === false ? null : task,
+    nodeBinDir: '/node/bin',
+    cwd: opts?.dir ?? cwd
   });
 
-  it('app value overrides global', () => {
-    const env = buildEffective({
-      processEnv: {},
-      global: [{ key: 'DEBUG', value: 'app:*', enabled: true }],
-      app: [{ key: 'DEBUG', value: 'app:auth', enabled: true }],
-      task: [],
-      dotEnv: {}
-    });
-    expect(env.DEBUG).toBe('app:auth');
-  });
-
-  it('task value overrides app and global', () => {
-    const env = buildEffective({
-      processEnv: {},
-      global: [{ key: 'DEBUG', value: 'app:*', enabled: true }],
-      app: [{ key: 'DEBUG', value: 'app:auth', enabled: true }],
-      task: [{ key: 'DEBUG', value: 'app:auth:trace', enabled: true }],
-      dotEnv: {}
-    });
+describe('EnvBuilder layering (real builder, shipped precedence)', () => {
+  it('global < app < task (later scope wins)', async () => {
+    const env = await build(
+      makeBuilder({
+        global: [row('DEBUG', 'app:*')],
+        app: [row('DEBUG', 'app:auth')],
+        task: [row('DEBUG', 'app:auth:trace')]
+      })
+    );
     expect(env.DEBUG).toBe('app:auth:trace');
   });
 
-  it('task can override global directly with no app row in between', () => {
-    const env = buildEffective({
-      processEnv: {},
-      global: [{ key: 'NODE_ENV', value: 'development', enabled: true }],
-      app: [],
-      task: [{ key: 'NODE_ENV', value: 'test', enabled: true }],
-      dotEnv: {}
-    });
-    expect(env.NODE_ENV).toBe('test');
+  it('user-configured vars override the project .env (UI is source of truth)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'envlayer-uservs-'));
+    writeFileSync(join(dir, '.env'), 'API_URL=https://dotenv\nONLY_FILE=file-val\n');
+    const env = await build(makeBuilder({ app: [row('API_URL', 'https://user')] }), { dir });
+    rmSync(dir, { recursive: true, force: true });
+    expect(env.API_URL).toBe('https://user'); // OLD behavior was 'https://dotenv'
+    expect(env.ONLY_FILE).toBe('file-val'); // untouched keys still flow through
   });
 
-  it('disabled rows are skipped at every scope', () => {
-    const env = buildEffective({
-      processEnv: {},
-      global: [{ key: 'PORT', value: '3000', enabled: true }],
-      app: [{ key: 'PORT', value: '4000', enabled: false }],
-      task: [{ key: 'PORT', value: '5000', enabled: false }],
-      dotEnv: {}
-    });
-    // app + task rows are disabled → global wins
+  it('.env can never set process-control keys (PATH / NODE_OPTIONS / DYLD_*)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'envlayer-ctl-'));
+    writeFileSync(
+      join(dir, '.env'),
+      'PATH=/tmp/evil\nNODE_OPTIONS=--require /tmp/evil.js\nDYLD_INSERT_LIBRARIES=/tmp/evil.dylib\nSAFE=ok\n'
+    );
+    const env = await build(makeBuilder({}), { dir });
+    rmSync(dir, { recursive: true, force: true });
+    expect(env.PATH).toBe('/node/bin:/probe/bin:/usr/bin'); // computed PATH intact
+    expect(env.NODE_OPTIONS).toBeUndefined();
+    expect(env.DYLD_INSERT_LIBRARIES).toBeUndefined();
+    expect(env.SAFE).toBe('ok');
+  });
+
+  it('.env variants load in conventional order (.env < .env.development < .env.local)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'envlayer-variants-'));
+    writeFileSync(join(dir, '.env'), 'A=base\nB=base\nC=base\n');
+    writeFileSync(join(dir, '.env.development'), 'B=dev\nC=dev\n');
+    writeFileSync(join(dir, '.env.local'), 'C=local\n');
+    const env = await build(makeBuilder({}), { dir });
+    rmSync(dir, { recursive: true, force: true });
+    expect(env.A).toBe('base');
+    expect(env.B).toBe('dev');
+    expect(env.C).toBe('local');
+  });
+
+  it('disabled rows are skipped at every scope', async () => {
+    const env = await build(
+      makeBuilder({
+        global: [row('PORT', '3000')],
+        app: [row('PORT', '4000', false)],
+        task: [row('PORT', '5000', false)]
+      })
+    );
     expect(env.PORT).toBe('3000');
   });
 
-  it('.env from the task cwd is the outermost layer and overrides everything', () => {
-    const env = buildEffective({
-      processEnv: {},
-      global: [{ key: 'API_URL', value: 'https://global', enabled: true }],
-      app: [{ key: 'API_URL', value: 'https://app', enabled: true }],
-      task: [{ key: 'API_URL', value: 'https://task', enabled: true }],
-      dotEnv: { API_URL: 'https://dotenv' }
-    });
-    expect(env.API_URL).toBe('https://dotenv');
+  it('task scope is only applied when a task is passed', async () => {
+    const env = await build(makeBuilder({ task: [row('ONLY_TASK', 'x')] }), { withTask: false });
+    expect(env.ONLY_TASK).toBeUndefined();
   });
 
-  it('inherits process keys that no scope touches', () => {
-    const env = buildEffective({
-      processEnv: { HOME: '/Users/me', PATH: '/usr/bin' },
-      global: [],
-      app: [],
-      task: [],
-      dotEnv: {}
-    });
-    expect(env.HOME).toBe('/Users/me');
-    expect(env.PATH).toBe('/usr/bin');
+  it('computed PATH prepends the node bin dir to the probed login-shell PATH', async () => {
+    const env = await build(makeBuilder({}));
+    expect(env.PATH).toBe('/node/bin:/probe/bin:/usr/bin');
   });
 
-  it('different tasks of the same app get distinct PORT values', () => {
-    const base = {
-      processEnv: {},
-      global: [{ key: 'NODE_ENV', value: 'development', enabled: true }],
-      app: [{ key: 'DATABASE_URL', value: 'postgres://local', enabled: true }],
-      dotEnv: {}
-    };
-    const apiEnv = buildEffective({
-      ...base,
-      task: [{ key: 'PORT', value: '4000', enabled: true }]
-    });
-    const webEnv = buildEffective({
-      ...base,
-      task: [{ key: 'PORT', value: '5173', enabled: true }]
-    });
-    expect(apiEnv.PORT).toBe('4000');
-    expect(webEnv.PORT).toBe('5173');
-    // App-shared values still present in both
-    expect(apiEnv.DATABASE_URL).toBe('postgres://local');
-    expect(webEnv.DATABASE_URL).toBe('postgres://local');
-    expect(apiEnv.NODE_ENV).toBe('development');
-    expect(webEnv.NODE_ENV).toBe('development');
+  it('hard-coded runtime keys cap the stack', async () => {
+    const env = await build(makeBuilder({ task: [row('TERM', 'dumb'), row('FORCE_COLOR', '0')] }));
+    // FORCE_COLOR/TERM are set after all scopes - even a task row can't change them.
+    expect(env.FORCE_COLOR).toBe('1');
+    expect(env.TERM).toBe('xterm-256color');
   });
 
-  it('empty key is ignored (defensive)', () => {
-    const env = buildEffective({
-      processEnv: {},
-      global: [{ key: '', value: 'whatever', enabled: true }],
-      app: [],
-      task: [],
-      dotEnv: {}
-    });
-    expect(env['']).toBeUndefined();
+  it('different tasks of the same app get distinct task-scope values', async () => {
+    const base = { global: [row('NODE_ENV', 'development')], app: [row('DB', 'postgres://local')] };
+    const api = await build(makeBuilder({ ...base, task: [row('PORT', '4000')] }));
+    const web = await build(makeBuilder({ ...base, task: [row('PORT', '5173')] }));
+    expect(api.PORT).toBe('4000');
+    expect(web.PORT).toBe('5173');
+    expect(api.DB).toBe('postgres://local');
+    expect(web.NODE_ENV).toBe('development');
   });
 });

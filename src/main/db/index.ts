@@ -14,21 +14,49 @@ const migrationModules = import.meta.glob('./migrations/*.sql', {
 }) as Record<string, string>;
 
 let _db: DB | null = null;
+let shuttingDown = false;
+
+export function dbFile(): string {
+  return join(app.getPath('userData'), 'devharbor.db');
+}
 
 export function db(): DB {
   if (_db) return _db;
 
   const dir = app.getPath('userData');
   mkdirSync(dir, { recursive: true });
-
   const file = join(dir, 'devharbor.db');
-  _db = new Database(file);
-  _db.pragma('journal_mode = WAL');
-  _db.pragma('foreign_keys = ON');
 
-  ensureMigrationsTable(_db);
-  runMigrations(_db);
-  backfillTasksForExistingApps();
+  // A late write during shutdown (e.g. a final run_history UPDATE) must NOT re-run migrations
+  // + backfill on a freshly-opened handle. The schema already exists - open minimally.
+  if (shuttingDown) {
+    const reopened = new Database(file);
+    reopened.pragma('journal_mode = WAL');
+    reopened.pragma('foreign_keys = ON');
+    _db = reopened;
+    return _db;
+  }
+
+  const database = new Database(file);
+  database.pragma('journal_mode = WAL');
+  database.pragma('foreign_keys = ON');
+
+  try {
+    ensureMigrationsTable(database);
+    runMigrations(database);
+    // backfill reads through db(), so the handle must be assigned first - but only AFTER
+    // migrations succeed, so a thrown migration never leaves a half-migrated handle cached.
+    _db = database;
+    backfillTasksForExistingApps();
+  } catch (e) {
+    _db = null;
+    try {
+      database.close();
+    } catch {
+      // ignore
+    }
+    throw e;
+  }
 
   return _db;
 }
@@ -51,7 +79,7 @@ function runMigrations(d: DB): void {
 
   const entries = Object.entries(migrationModules)
     .map(([path, sql]) => {
-      // path looks like './migrations/0001_init.sql' — strip prefix + extension for the version key.
+      // path looks like './migrations/0001_init.sql' - strip prefix + extension for the version key.
       const file = path.split('/').pop() ?? path;
       const version = file.replace(/\.sql$/, '');
       return { version, sql };
@@ -73,6 +101,16 @@ function runMigrations(d: DB): void {
 }
 
 export function closeDb(): void {
-  _db?.close();
+  shuttingDown = true;
+  if (_db) {
+    // Flush the WAL into the main db file so an export/backup taken right after isn't missing
+    // recent writes, and so db:reset doesn't strand an orphaned -wal (IMPROVEMENT-PLAN 5.11).
+    try {
+      _db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+      // ignore
+    }
+    _db.close();
+  }
   _db = null;
 }

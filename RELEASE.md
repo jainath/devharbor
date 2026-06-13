@@ -2,7 +2,7 @@
 
 DevHarbor ships as a **code-signed, notarized** macOS app and auto-updates from
 **GitHub Releases** via `electron-updater`. Releases are triggered by pushing a
-`v*` tag — GitHub Actions builds, signs, notarizes, and publishes the artifacts.
+`v*` tag - GitHub Actions builds, signs, notarizes, and publishes the artifacts.
 
 ## One-time setup
 
@@ -55,19 +55,33 @@ git push origin main --tags
 ```
 
 The `Release` workflow (`.github/workflows/release.yml`) runs on `macos-14`, builds
-**arm64 + x64** (`--mac --arm64 --x64 --publish always`), signs + notarizes, and creates
+**arm64 + x64** (`--mac --arm64 --x64`), signs + notarizes, and creates
 the GitHub Release with `*.dmg`, `*.zip`, `*.blockmap`, and `latest-mac.yml`.
 
-> The git **tag** must match `package.json` `version` (prefixed with `v`) or
-> `electron-builder` will reject the publish.
+> A guard step fails the workflow unless it was triggered by a `v*` **tag whose number
+> matches `package.json` `version`** - so a stale version bump is caught before any
+> signing/publishing happens.
+
+### Dry-run the pipeline (no publish)
+
+Trigger the workflow manually (**Actions → Release → Run workflow**, any branch). Manual
+dispatch runs skip the tag guard and build with `--publish never`: the full
+build + sign + notarize path is exercised and the artifacts are uploaded to the workflow
+run (not to a Release). Use this to validate toolchain changes - runner images, action
+versions, certificate renewals - without burning a version number.
+
+### CI
+
+`.github/workflows/ci.yml` runs typecheck, ESLint, and the test suite on every push/PR to
+`main` (also on `macos-14`, so the native-module rebuild path matches the release runner).
 
 ## Verify after publish
 
 1. Download the `arm64` (Apple Silicon) or `x64` (Intel) `.dmg` from the Release on a
-   clean Mac — it should open **without** the right-click→Open bypass (proves notarization).
+   clean Mac - it should open **without** the right-click→Open bypass (proves notarization).
 2. Auto-update: install the *previous* version, launch it, and confirm the in-app
    updater detects, downloads, and installs the new one. (Auto-update only works on
-   **signed** builds — `squirrel.mac` verifies the Developer ID signature.)
+   **signed** builds - `squirrel.mac` verifies the Developer ID signature.)
 
 ## Artifacts & channels
 

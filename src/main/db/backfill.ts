@@ -5,7 +5,7 @@ import { ulid } from 'ulid';
  * Phase 1.5 backfill: every existing App that doesn't yet have any tasks
  * gets one synthesised from its `default_script` / `custom_command`.
  *
- * Idempotent — re-running does nothing once the seed task exists.
+ * Idempotent - re-running does nothing once the seed task exists.
  */
 export function backfillTasksForExistingApps(): void {
   const d = db();
@@ -40,7 +40,7 @@ export function backfillTasksForExistingApps(): void {
       } else if (row.default_script) {
         insert.run(id, row.id, row.default_script, 'script', row.default_script, null, now, now);
       } else {
-        // No script and no custom command — skip. The app needs explicit task creation.
+        // No script and no custom command - skip. The app needs explicit task creation.
       }
     }
   });

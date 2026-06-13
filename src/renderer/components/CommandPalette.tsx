@@ -7,22 +7,29 @@ import {
   Settings,
   Boxes,
   FolderPlus,
+  FolderInput,
+  Search,
   ArrowRight
 } from 'lucide-react';
 import type { AppId, TaskId } from '@shared/types';
 import { useStore } from '../store/store';
+import { invokeOrToast } from '../lib/invoke';
 import './CommandPalette.css';
 
 export function CommandPalette({
   open,
   onOpenChange,
   onAddApp,
-  onOpenSettings
+  onOpenSettings,
+  onImportProjects,
+  onSearchLogs
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onAddApp: () => void;
   onOpenSettings: () => void;
+  onImportProjects: () => void;
+  onSearchLogs: () => void;
 }): JSX.Element | null {
   const apps = useStore((s) => s.apps);
   const appState = useStore((s) => s.appState);
@@ -74,20 +81,28 @@ export function CommandPalette({
     close();
   };
 
-  const startApp = async (id: AppId): Promise<void> => {
-    void window.api.invoke('proc:start', { id });
+  // The palette closes the instant an action is picked, so a rejected lifecycle invoke
+  // (zero enabled tasks, missing Node version, moved folder) would otherwise vanish with no
+  // surface. Route every invoke through invokeOrToast so failures land as a toast post-close.
+  const startApp = (id: AppId): void => {
+    void invokeOrToast('proc:start', { id }, { context: 'Start failed' });
     close();
   };
-  const stopApp = async (id: AppId): Promise<void> => {
-    void window.api.invoke('proc:stop', { id });
+  const stopApp = (id: AppId): void => {
+    void invokeOrToast('proc:stop', { id }, { context: 'Stop failed' });
     close();
   };
-  const restartApp = async (id: AppId): Promise<void> => {
-    void window.api.invoke('proc:restart', { id });
+  const restartApp = (id: AppId): void => {
+    void invokeOrToast('proc:restart', { id }, { context: 'Restart failed' });
     close();
   };
-  const stopTask = async (id: TaskId): Promise<void> => {
-    void window.api.invoke('task:stop', { id });
+  const stopTask = (id: TaskId): void => {
+    void invokeOrToast('task:stop', { id }, { context: 'Stop failed' });
+    close();
+  };
+  // "Stop all" fans out concurrently; each failure toasts independently.
+  const stopAll = (): void => {
+    for (const a of running) void invokeOrToast('proc:stop', { id: a.id }, { context: 'Stop failed' });
     close();
   };
 
@@ -150,7 +165,7 @@ export function CommandPalette({
                   <Command.Item
                     key={`stop-${a.id}`}
                     value={`stop ${a.name}`}
-                    onSelect={() => void stopApp(a.id as AppId)}
+                    onSelect={() => stopApp(a.id as AppId)}
                     className="cmdk-item"
                   >
                     <Square className="h-3.5 w-3.5 text-danger-strong" />
@@ -163,7 +178,7 @@ export function CommandPalette({
                   <Command.Item
                     key={`restart-${a.id}`}
                     value={`restart ${a.name}`}
-                    onSelect={() => void restartApp(a.id as AppId)}
+                    onSelect={() => restartApp(a.id as AppId)}
                     className="cmdk-item"
                   >
                     <RotateCw className="h-3.5 w-3.5 text-warn-strong" />
@@ -181,7 +196,7 @@ export function CommandPalette({
                   <Command.Item
                     key={`stop-task-${t.taskId}`}
                     value={`stop task ${t.appName} ${t.taskName}`}
-                    onSelect={() => void stopTask(t.taskId)}
+                    onSelect={() => stopTask(t.taskId)}
                     className="cmdk-item"
                   >
                     <Square className="h-3.5 w-3.5 text-danger-strong" />
@@ -202,7 +217,7 @@ export function CommandPalette({
                     <Command.Item
                       key={`start-${a.id}`}
                       value={`start ${a.name}`}
-                      onSelect={() => void startApp(a.id as AppId)}
+                      onSelect={() => startApp(a.id as AppId)}
                       className="cmdk-item"
                     >
                       <Play className="h-3.5 w-3.5 text-success-strong" />
@@ -238,6 +253,29 @@ export function CommandPalette({
                 <span className="flex-1">Add app…</span>
               </Command.Item>
               <Command.Item
+                value="import projects scan folder bulk register"
+                onSelect={() => {
+                  close();
+                  onImportProjects();
+                }}
+                className="cmdk-item"
+              >
+                <FolderInput className="h-3.5 w-3.5 text-fg-muted" />
+                <span className="flex-1">Import projects…</span>
+              </Command.Item>
+              <Command.Item
+                value="search all logs global grep find"
+                onSelect={() => {
+                  close();
+                  onSearchLogs();
+                }}
+                className="cmdk-item"
+              >
+                <Search className="h-3.5 w-3.5 text-fg-muted" />
+                <span className="flex-1">Search all logs…</span>
+                <kbd className="rounded bg-elevated px-1 text-[10px] text-fg-subtle">⌘⇧F</kbd>
+              </Command.Item>
+              <Command.Item
                 value="settings preferences theme refresh"
                 onSelect={() => {
                   close();
@@ -251,10 +289,7 @@ export function CommandPalette({
               {running.length > 0 && (
                 <Command.Item
                   value="stop all stop everything"
-                  onSelect={() => {
-                    for (const a of running) void window.api.invoke('proc:stop', { id: a.id });
-                    close();
-                  }}
+                  onSelect={stopAll}
                   className="cmdk-item"
                 >
                   <Square className="h-3.5 w-3.5 text-danger-strong" />

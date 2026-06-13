@@ -23,6 +23,7 @@ type AppRow = {
   custom_command: string | null;
   working_dir: string;
   auto_restart_on_change: number;
+  auto_start: number;
   watch_globs: string;
   port_hint: number | null;
   tags: string;
@@ -100,14 +101,38 @@ export class AppRegistry {
     const current = this.get(id);
     if (!current) throw new Error(`App not found: ${id}`);
 
-    const next: App = { ...current, ...patch, updatedAt: Date.now() };
+    // Validate & canonicalise a changed working directory the same way add()
+    // validates the app path. Without this an IPC patch could point working_dir
+    // at a non-existent or non-directory location (or a non-canonical symlink),
+    // which would later break process spawning. Only re-validate when it
+    // actually changes so unrelated patches stay cheap.
+    let workingDir = current.workingDir;
+    if (patch.workingDir != null && patch.workingDir !== current.workingDir) {
+      workingDir = this.normaliseDir(patch.workingDir);
+    }
+
+    // Pin the identity / immutable fields to the CURRENT row's values. A patch
+    // is untrusted (it arrives over IPC) and must never be able to change which
+    // row we write - `id` is forced back so the WHERE clause below can't be
+    // retargeted at a different app, and `path`/`createdAt` are forced back so a
+    // stray field can't silently rewrite immutable provenance. updatedAt is
+    // always refreshed to now, exactly as before.
+    const next: App = {
+      ...current,
+      ...patch,
+      id: current.id,
+      path: current.path,
+      createdAt: current.createdAt,
+      workingDir,
+      updatedAt: Date.now()
+    };
 
     db()
       .prepare(
         `UPDATE apps SET
           name = ?, color = ?, icon = ?, node_version_pref = ?, package_manager = ?,
           default_script = ?, custom_command = ?, working_dir = ?,
-          auto_restart_on_change = ?, watch_globs = ?, port_hint = ?, tags = ?,
+          auto_restart_on_change = ?, auto_start = ?, watch_globs = ?, port_hint = ?, tags = ?,
           folder = ?, last_started_at = ?, last_exit_code = ?, updated_at = ?
         WHERE id = ?`
       )
@@ -121,6 +146,7 @@ export class AppRegistry {
         next.customCommand,
         next.workingDir,
         next.autoRestartOnChange ? 1 : 0,
+        next.autoStart ? 1 : 0,
         JSON.stringify(next.watchGlobs),
         next.portHint,
         JSON.stringify(next.tags),
@@ -140,7 +166,7 @@ export class AppRegistry {
 
   /**
    * Distinct folder names across all apps, sorted alphabetically (case-insensitive).
-   * Excludes NULL — that's the "(Ungrouped)" pseudo-folder, handled at render time.
+   * Excludes NULL - that's the "(Ungrouped)" pseudo-folder, handled at render time.
    */
   listFolders(): string[] {
     const rows = db()
@@ -178,14 +204,39 @@ export class AppRegistry {
   }
 
   private normalisePath(p: string): string {
+    return this.normaliseDir(p, 'path');
+  }
+
+  /**
+   * Resolve `p` to a canonical, existing directory. Shared by add() (app path)
+   * and update() (working_dir) so both enforce the same realpath + isDirectory
+   * invariant; `label` only tailors the error message for the caller.
+   */
+  private normaliseDir(p: string, label = 'workingDir'): string {
     try {
       const real = realpathSync(p);
       const s = statSync(real);
       if (!s.isDirectory()) throw new Error(`Not a directory: ${p}`);
       return real;
     } catch (err) {
-      throw new Error(`Invalid path: ${p} (${(err as Error).message})`);
+      throw new Error(`Invalid ${label}: ${p} (${(err as Error).message})`);
     }
+  }
+}
+
+/**
+ * Parse a JSON column defensively. A single corrupt cell (e.g. truncated write,
+ * manual DB edit, or a schema-migration mishap) must not blow up the entire
+ * `list()` - one bad row would otherwise throw and hide every other app. On
+ * failure we warn once per call site and fall back to the column's default so
+ * the app still surfaces in the UI and can be repaired by re-saving.
+ */
+function safeJson<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn(`[AppRegistry] Ignoring corrupt JSON column; using fallback. Raw: ${raw}`);
+    return fallback;
   }
 }
 
@@ -196,15 +247,16 @@ function rowToApp(r: AppRow): App {
     path: r.path,
     color: r.color,
     icon: r.icon ?? undefined,
-    nodeVersionPref: JSON.parse(r.node_version_pref) as NodeVersionPref,
+    nodeVersionPref: safeJson<NodeVersionPref>(r.node_version_pref, { kind: 'auto' }),
     packageManager: (r.package_manager as PackageManager | null) ?? null,
     defaultScript: r.default_script,
     customCommand: r.custom_command,
     workingDir: r.working_dir,
     autoRestartOnChange: !!r.auto_restart_on_change,
-    watchGlobs: JSON.parse(r.watch_globs) as string[],
+    autoStart: !!r.auto_start,
+    watchGlobs: safeJson<string[]>(r.watch_globs, []),
     portHint: r.port_hint,
-    tags: JSON.parse(r.tags) as string[],
+    tags: safeJson<string[]>(r.tags, []),
     folder: r.folder ?? null,
     lastStartedAt: r.last_started_at,
     lastExitCode: r.last_exit_code,

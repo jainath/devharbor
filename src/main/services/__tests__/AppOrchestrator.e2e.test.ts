@@ -7,7 +7,7 @@ import type { App, ProcessState, Task } from '@shared/types';
 /**
  * REAL end-to-end check: spawns an actual short-lived process via TaskRunner, runs the true
  * Start → Stop cycle through AppOrchestrator, and records every `proc:status` the renderer
- * WOULD receive — INCLUDING after the ~1.5s post-exit teardown. Only the DB/FS-touching
+ * WOULD receive - INCLUDING after the ~1.5s post-exit teardown. Only the DB/FS-touching
  * collaborators are stubbed; the pty, event wiring, and state derivation are the real code.
  *
  * This is the definitive reproduction for the "app reverts to Idle after stop" report.
@@ -28,6 +28,7 @@ function makeApp(): App {
     customCommand: null,
     workingDir: process.cwd(),
     autoRestartOnChange: false,
+    autoStart: false,
     watchGlobs: [],
     portHint: null,
     tags: [],
@@ -72,7 +73,7 @@ function makeRunner(): TaskRunner {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const nodes: any = { resolve: () => ({ binDir: '', version: 'system', source: 'system' }) };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const logs: any = { append: () => {}, read: () => '', tail: () => '', clear: () => {} };
+  const logs: any = { append: () => {}, read: () => '', tail: () => '', clear: () => {}, markExited: () => {} };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const history: any = { start: () => 'run1', finish: () => {} };
   class FakeMon extends EventEmitter {
@@ -96,7 +97,7 @@ function makeRunner(): TaskRunner {
 }
 
 describe('AppOrchestrator REAL start→stop (spawns a process)', () => {
-  it('stays "exited" after stop — including past the 1.5s teardown', async () => {
+  it('stays "exited" after stop - including past the 1.5s teardown', async () => {
     const runner = makeRunner();
     const task = makeTask();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -126,5 +127,21 @@ describe('AppOrchestrator REAL start→stop (spawns a process)', () => {
     expect(afterTeardown).toBe('exited');
     // The renderer must never have been told 'idle' at any point.
     expect(log.map((l) => l.state)).not.toContain('idle');
+  }, 15000);
+
+  it('two concurrent start()s spawn exactly one PTY (IMPROVEMENT-PLAN 5.3)', async () => {
+    const runner = makeRunner();
+    const task = makeTask();
+
+    // Fire both starts in the same tick - the old code passed the isRunning guard twice (the
+    // check and tracked.set are separated by `await env.build`) and spawned two PTYs.
+    const [a, b] = await Promise.all([runner.start(task), runner.start(task)]);
+
+    expect(runner.list().length).toBe(1); // only one tracked run for the task
+    expect(a.snapshot.pid).toBe(b.snapshot.pid); // both callers observe the same run
+
+    await runner.stop(task.id);
+    await delay(2000); // past the 1500ms post-exit teardown window
+    expect(runner.list().length).toBe(0);
   }, 15000);
 });

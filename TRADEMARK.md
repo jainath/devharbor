@@ -13,7 +13,7 @@ licensed under the AGPL-3.0 and are **not** part of the open-source grant.
 
 - Use the Marks to **refer to** the official DevHarbor project (e.g. "compatible with DevHarbor",
   "based on DevHarbor"), as long as it's truthful and doesn't imply endorsement or affiliation.
-- Fork and modify the source code under the AGPL — that's encouraged.
+- Fork and modify the source code under the AGPL - that's encouraged.
 
 ## What you need to do when you fork or redistribute
 
@@ -24,7 +24,7 @@ If you distribute a modified version (a fork, a rebuild, a derivative product), 
 - Not use the DevHarbor logo or brand assets in your distribution.
 - Make clear it is your build, not the official project.
 
-(Unmodified builds straight from this repository may keep the DevHarbor name — this restriction
+(Unmodified builds straight from this repository may keep the DevHarbor name - this restriction
 is about *modified* or *competing* distributions.)
 
 ## Why

@@ -9,7 +9,7 @@ import type { NodeInstallation, NodeVersionPref } from '@shared/types';
  * Discover Node installations across nvm / fnm / volta / asdf / system,
  * and resolve a project's preferred version to an absolute bin directory.
  *
- * Filesystem-based — does NOT shell out to nvm (which is a shell function).
+ * Filesystem-based - does NOT shell out to nvm (which is a shell function).
  */
 export class NodeResolver {
   private cache: NodeInstallation[] | null = null;

@@ -8,9 +8,11 @@ import { cn } from '../lib/cn';
 /**
  * Virtualized, searchable view over a task's full log buffer.
  *
- * Pulls the current ring buffer via `task:readBuffer`, refreshes on every `task:log` event
- * (we just re-read; bounded buffer makes this cheap). ANSI is parsed once per line via
- * `anser` and rendered as inline spans.
+ * Pulls the current ring buffer via `task:readBuffer`. A noisy task can emit ~30 `task:log`
+ * events/sec, and each refresh re-reads (and splits) the whole multi-MB buffer - re-reading
+ * per event pins the renderer. We coalesce bursts behind a 300ms trailing throttle so the
+ * search view stays current without thrashing on every chunk. ANSI is parsed once per line
+ * via `anser` and rendered as inline spans.
  */
 export function LogSearchView({ taskId }: { taskId: TaskId }): JSX.Element {
   const [lines, setLines] = useState<string[]>([]);
@@ -18,6 +20,7 @@ export function LogSearchView({ taskId }: { taskId: TaskId }): JSX.Element {
   const [useRegex, setUseRegex] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const listRef = useRef<ListImperativeAPI | null>(null);
+  const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async (): Promise<void> => {
     const buf = await window.api.invoke('task:readBuffer', { id: taskId });
@@ -25,12 +28,28 @@ export function LogSearchView({ taskId }: { taskId: TaskId }): JSX.Element {
   }, [taskId]);
 
   useEffect(() => {
+    // Initial load is immediate; live updates are coalesced to a trailing 300ms refresh so a
+    // burst of chunks results in at most one buffer re-read per window (search stays correct
+    // because we always read the full buffer, never a delta).
     void refresh();
+    const scheduleRefresh = (): void => {
+      if (throttleRef.current) return; // a trailing refresh is already pending
+      throttleRef.current = setTimeout(() => {
+        throttleRef.current = null;
+        void refresh();
+      }, 300);
+    };
     const off = window.api.on('task:log', (e) => {
       if (e.taskId !== taskId) return;
-      void refresh();
+      scheduleRefresh();
     });
-    return off;
+    return () => {
+      off();
+      if (throttleRef.current) {
+        clearTimeout(throttleRef.current);
+        throttleRef.current = null;
+      }
+    };
   }, [taskId, refresh]);
 
   // Filter to matching lines (with their original index for the line-number column).

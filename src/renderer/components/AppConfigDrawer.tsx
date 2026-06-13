@@ -6,7 +6,10 @@ import { ErrorBanner } from './ErrorBanner';
 import { NodeVersionPicker } from './NodeVersionPicker';
 import { TagInput } from './TagInput';
 import { FolderSelect } from './FolderSelect';
+import { useDialog } from '../hooks/useDialog';
 import { cn } from '../lib/cn';
+
+const TITLE_ID = 'app-config-drawer-title';
 
 const DEFAULT_GLOBS = ['src/**/*.{ts,tsx,js,jsx,mjs,cjs}'];
 
@@ -20,6 +23,7 @@ export function AppConfigDrawer({
   const apps = useStore((s) => s.apps);
   const upsertApp = useStore((s) => s.upsertApp);
   const [name, setName] = useState(app.name);
+  const [autoStart, setAutoStart] = useState(app.autoStart);
   const [autoRestart, setAutoRestart] = useState(app.autoRestartOnChange);
   const [globsText, setGlobsText] = useState((app.watchGlobs.length ? app.watchGlobs : DEFAULT_GLOBS).join('\n'));
   const [tags, setTags] = useState<string[]>(app.tags);
@@ -28,8 +32,12 @@ export function AppConfigDrawer({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Focus trap + Escape-to-close + focus restore; aria wires the heading as the dialog label.
+  const { dialogProps } = useDialog(onClose, TITLE_ID);
+
   useEffect(() => {
     setName(app.name);
+    setAutoStart(app.autoStart);
     setAutoRestart(app.autoRestartOnChange);
     setGlobsText((app.watchGlobs.length ? app.watchGlobs : DEFAULT_GLOBS).join('\n'));
     setTags(app.tags);
@@ -38,6 +46,7 @@ export function AppConfigDrawer({
   }, [
     app.id,
     app.name,
+    app.autoStart,
     app.autoRestartOnChange,
     app.watchGlobs,
     app.tags,
@@ -67,6 +76,7 @@ export function AppConfigDrawer({
         id: app.id,
         patch: {
           name: name.trim() || app.name,
+          autoStart,
           autoRestartOnChange: autoRestart,
           watchGlobs,
           tags,
@@ -85,9 +95,14 @@ export function AppConfigDrawer({
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
-      <div className="flex h-full max-h-[640px] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-base shadow-2xl">
+      <div
+        {...dialogProps}
+        className="flex h-full max-h-[640px] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-base shadow-2xl"
+      >
         <header className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-sm font-medium text-fg">App settings — {app.name}</h2>
+          <h2 id={TITLE_ID} className="text-sm font-medium text-fg">
+            App settings - {app.name}
+          </h2>
           <button
             onClick={onClose}
             className="rounded-md p-1 text-fg-subtle hover:bg-surface hover:text-fg"
@@ -108,6 +123,10 @@ export function AppConfigDrawer({
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                // Cap at 60 (matches the folder-name limit) so a pasted path or scoped
+                // package name can't overflow the sidebar / ⌘P switcher downstream.
+                maxLength={60}
+                data-autofocus
                 className="w-72 rounded-md border border-border bg-surface px-2 py-1 text-sm text-fg"
               />
             </Field>
@@ -135,25 +154,48 @@ export function AppConfigDrawer({
 
             <div className="border-t border-border pt-5">
               <Field
-                label="Auto-restart on file change"
-                description="When enabled, file changes matching the globs below restart the running app (debounced 500ms). Off by default."
+                label="Start automatically when DevHarbor launches"
+                description="When enabled, this app's default task starts on app launch (after a short stagger). Off by default."
               >
                 <button
-                  onClick={() => setAutoRestart((v) => !v)}
+                  onClick={() => setAutoStart((v) => !v)}
                   className={cn(
                     'inline-flex h-5 w-9 items-center rounded-full transition-colors',
-                    autoRestart ? 'bg-accent' : 'bg-elevated'
+                    autoStart ? 'bg-accent' : 'bg-elevated'
                   )}
-                  aria-pressed={autoRestart}
+                  aria-pressed={autoStart}
                 >
                   <span
                     className={cn(
                       'inline-block h-4 w-4 rounded-full bg-white transition-transform',
-                      autoRestart ? 'translate-x-4' : 'translate-x-0.5'
+                      autoStart ? 'translate-x-4' : 'translate-x-0.5'
                     )}
                   />
                 </button>
               </Field>
+
+              <div className="mt-5">
+                <Field
+                  label="Auto-restart on file change"
+                  description="When enabled, file changes matching the globs below restart the running app (debounced 500ms). Off by default."
+                >
+                  <button
+                    onClick={() => setAutoRestart((v) => !v)}
+                    className={cn(
+                      'inline-flex h-5 w-9 items-center rounded-full transition-colors',
+                      autoRestart ? 'bg-accent' : 'bg-elevated'
+                    )}
+                    aria-pressed={autoRestart}
+                  >
+                    <span
+                      className={cn(
+                        'inline-block h-4 w-4 rounded-full bg-white transition-transform',
+                        autoRestart ? 'translate-x-4' : 'translate-x-0.5'
+                      )}
+                    />
+                  </button>
+                </Field>
+              </div>
 
               <div className="mt-3">
                 <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">

@@ -1,8 +1,8 @@
 {
   "name": "devharbor",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
-  "description": "DevHarbor — a harbor for your local dev servers. Desktop app for managing local Node.js projects on macOS.",
+  "description": "DevHarbor - a harbor for your local dev servers. Desktop app for managing local Node.js projects on macOS.",
   "author": "Jainath Ponnala",
   "license": "AGPL-3.0-only",
   "homepage": "https://www.devharbor.app",
@@ -21,6 +21,10 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "pnpm typecheck:node && pnpm typecheck:web",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
     "rebuild": "electron-rebuild -f -w better-sqlite3,@homebridge/node-pty-prebuilt-multiarch",
@@ -30,7 +34,7 @@
     "pack:mac:universal": "electron-vite build && electron-builder --mac --universal"
   },
   "comments": {
-    "dependencies": "ONLY main-process / native modules that electron-vite externalizes belong here — electron-builder ships every production dependency into the asar as raw node_modules. Renderer-only libs (react, lucide-react, xterm, etc.) are bundled into out/renderer by Vite, so they live in devDependencies to avoid being shipped twice (lucide-react alone is 3,500+ files)."
+    "dependencies": "ONLY main-process / native modules that electron-vite externalizes belong here - electron-builder ships every production dependency into the asar as raw node_modules. Renderer-only libs (react, lucide-react, xterm, etc.) are bundled into out/renderer by Vite, so they live in devDependencies to avoid being shipped twice (lucide-react alone is 3,500+ files)."
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
@@ -38,16 +42,20 @@
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.3",
     "package-manager-detector": "^1.6.0",
+    "picomatch": "^4.0.4",
     "pidusage": "^4.0.1",
     "semver": "^7.8.1",
     "tree-kill": "^1.2.2",
     "ulid": "^2.3.0"
   },
   "devDependencies": {
+    "@electron/fuses": "^1.8.0",
     "@electron/notarize": "^3.1.1",
     "@electron/rebuild": "^3.7.0",
+    "@eslint/js": "^9.39.4",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.9.0",
+    "@types/picomatch": "^3.0.2",
     "@types/pidusage": "^2.0.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -66,14 +74,18 @@
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "lucide-react": "^0.460.0",
     "postcss": "^8.4.49",
+    "prettier": "^3.8.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-window": "^2.2.7",
     "tailwind-merge": "^2.5.4",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
+    "typescript-eslint": "^8.61.0",
     "vite": "^5.4.11",
     "vitest": "^2.1.9",
     "zustand": "^5.0.1"

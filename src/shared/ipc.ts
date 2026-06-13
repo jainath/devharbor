@@ -1,15 +1,60 @@
 import type {
   App,
   AppId,
+  CommandKind,
   DetectionResult,
   EnvVar,
   NodeInstallation,
+  NodeVersionPref,
+  PackageManager,
   ProcessState,
   RunningProcess,
   RunningTask,
   Task,
   TaskId
 } from './types';
+
+export interface CreateTaskSpec {
+  name: string;
+  commandKind: CommandKind;
+  script?: string | null;
+  customCommand?: string | null;
+  /** Run from this subdir (relative to the app path) - used for monorepo workspace tasks. */
+  workingDirOverride?: string | null;
+}
+
+/** Atomic add-app payload - main creates the app + tasks + env in one DB transaction. */
+export interface CreateAppInput {
+  path: string;
+  name?: string;
+  nodeVersionPref?: NodeVersionPref;
+  packageManager?: PackageManager | null;
+  defaultScript?: string | null;
+  /** A single first task (the common case). */
+  firstTask?: CreateTaskSpec | null;
+  /** Multiple tasks (e.g. one per monorepo workspace package). Created after firstTask. */
+  tasks?: CreateTaskSpec[];
+  envVars?: { key: string; value: string; isSecret?: boolean }[];
+}
+
+/** One candidate project found by a shallow folder scan (bulk import). */
+export interface ImportCandidate {
+  path: string;
+  name: string;
+  alreadyRegistered: boolean;
+  packageManager: PackageManager | null;
+  suggestedScript: string | null;
+  scripts: string[];
+}
+
+/** A single matching log line from a cross-task global search. */
+export interface GlobalLogMatch {
+  appId: AppId;
+  taskId: TaskId;
+  appName: string;
+  taskName: string;
+  line: string;
+}
 
 /** Mirrored from src/main/services/RunHistory.ts so the renderer can render rows. */
 export interface RunHistoryRow {
@@ -39,10 +84,14 @@ export type InvokeChannels = {
 
   'apps:list': { req: void; res: App[] };
   'apps:add': { req: { path: string }; res: App };
+  /** Atomic create: app + first task + env vars in one transaction (replaces the renderer's 4-call add). */
+  'apps:create': { req: CreateAppInput; res: App };
   'apps:update': { req: { id: AppId; patch: Partial<App> }; res: App };
   'apps:remove': { req: { id: AppId }; res: void };
   'apps:detect': { req: { path: string }; res: DetectionResult };
   'apps:findByPath': { req: { path: string }; res: App | null };
+  /** Shallow-scan a folder for package.json projects (bulk import). */
+  'apps:scanFolder': { req: { dir: string }; res: ImportCandidate[] };
 
   // App-level lifecycle (orchestrator coordinates all tasks).
   'proc:start': { req: { id: AppId }; res: void };
@@ -52,6 +101,8 @@ export type InvokeChannels = {
 
   // Task CRUD.
   'tasks:list': { req: { appId: AppId }; res: Task[] };
+  /** All tasks for all apps in one query - used at boot instead of N+1 tasks:list calls. */
+  'tasks:listAll': { req: void; res: Record<string, Task[]> };
   'tasks:add': { req: { appId: AppId; patch: Partial<Task> }; res: Task };
   'tasks:update': { req: { id: TaskId; patch: Partial<Task> }; res: Task };
   'tasks:remove': { req: { id: TaskId }; res: void };
@@ -67,13 +118,21 @@ export type InvokeChannels = {
   'task:tailBuffer': { req: { id: TaskId; maxLines?: number }; res: string };
   'task:clearBuffer': { req: { id: TaskId }; res: void };
 
+  // Visibility-gated log streaming: the renderer subscribes to the task(s) it's showing so
+  // main only forwards `task:log` events for those, instead of every running task.
+  'task:subscribeLogs': { req: { id: TaskId }; res: void };
+  'task:unsubscribeLogs': { req: { id: TaskId }; res: void };
+
+  // Cross-task global log search (fans over every live task's buffer in main).
+  'logs:searchAll': { req: { query: string; flags?: string; limit?: number }; res: GlobalLogMatch[] };
+
   // Resize the PTY when the renderer's xterm grid changes.
   'task:resize': { req: { id: TaskId; cols: number; rows: number }; res: void };
 
   // Run history.
   'runs:list': { req: { appId: AppId; limit?: number }; res: RunHistoryRow[] };
 
-  // Env files discovered in a project (read-only — for the side panel).
+  // Env files discovered in a project (read-only - for the side panel).
   'env:files': { req: { id: AppId }; res: EnvFileInfo[] };
 
   // Settings.
@@ -82,6 +141,12 @@ export type InvokeChannels = {
 
   // Apply a downloaded auto-update (quit & install).
   'update:install': { req: void; res: void };
+  /** Manual "Check for Updates…" - re-runs the feed check now. */
+  'update:check': { req: void; res: void };
+
+  // Diagnostics: DevHarbor's own local log file (no telemetry - for bug reports).
+  'logs:path': { req: void; res: string };
+  'logs:openFolder': { req: void; res: void };
 
   // DB danger zone.
   'db:export': { req: void; res: string | null };          // returns the saved-to path, or null if user cancelled
@@ -99,7 +164,7 @@ export type InvokeChannels = {
   'env:getTask': { req: { id: TaskId }; res: EnvVar[] };
   'env:setTask': { req: { id: TaskId; vars: EnvVar[] }; res: void };
 
-  // Phase 8 — F21 folder operations. App-level folder field is set via apps:update.
+  // Phase 8 - F21 folder operations. App-level folder field is set via apps:update.
   'folders:list': { req: void; res: string[] };
   'folders:rename': { req: { from: string; to: string }; res: void };
   'folders:clear': { req: { name: string }; res: void };
@@ -156,13 +221,19 @@ export type EventChannels = {
   };
 
   /** An update is available (download starting). */
-  'update:available': { version: string };
+  'update:available': { version: string; releaseNotes?: string };
 
   /** Download progress for an in-flight update. */
   'update:progress': { percent: number; bytesPerSecond: number; transferred: number; total: number };
 
   /** An update has finished downloading; the user should restart to install. */
-  'update:ready': { version: string };
+  'update:ready': { version: string; releaseNotes?: string };
+
+  /** The update feed could not be reached / validated (offline, rate-limited, signature). */
+  'update:error': { message: string };
+
+  /** A manual or periodic check found no newer version. */
+  'update:notAvailable': { version: string };
 
   /** Deep link: focus a specific app. The renderer selects it in the sidebar. */
   'deepLink:focusApp': { appId: AppId };
@@ -171,8 +242,8 @@ export type EventChannels = {
   'deepLink:unknownPath': { path: string };
 
   /**
-   * Deep link: `devharbor://start?id=…` asked to start an app. We do NOT start it silently —
-   * any web page can fire this — so the renderer must confirm with the user first, then call
+   * Deep link: `devharbor://start?id=…` asked to start an app. We do NOT start it silently - 
+   * any web page can fire this - so the renderer must confirm with the user first, then call
    * `proc:start`. This keeps a clicked link from running local shell commands without consent.
    */
   'deepLink:confirmStart': { appId: AppId; appName: string };
@@ -181,6 +252,10 @@ export type EventChannels = {
   'menu:openSettings': Record<string, never>;
   'menu:addApp': Record<string, never>;
   'menu:newFolder': Record<string, never>;
+  /** Help → Check for Updates… - renderer invokes update:check so the result toasts. */
+  'menu:checkUpdates': Record<string, never>;
+  /** Help → Open Logs Folder - renderer invokes logs:openFolder. */
+  'menu:openLogs': Record<string, never>;
 };
 
 export interface EnvFileInfo {
@@ -205,6 +280,18 @@ export interface SettingsState {
   auto_update: boolean;
   theme: 'light' | 'dark' | 'system';
   dashboard_refresh_ms: number;
+  /** Show a desktop notification when a task crashes while DevHarbor is backgrounded. */
+  notify_on_crash: boolean;
+  /** Show a desktop notification when an app finishes starting (readiness reached). */
+  notify_on_ready: boolean;
+  /** Launch DevHarbor automatically at macOS login. */
+  launch_at_login: boolean;
+  /** Show the menubar tray icon. */
+  tray_enabled: boolean;
+  /** Keep at most this many run_history rows per app (older rows pruned on boot). */
+  run_history_limit: number;
+  /** Abort a task's start if its readiness signal hasn't fired within this many ms. */
+  readiness_timeout_ms: number;
 }
 
 export type InvokeChannelName = keyof InvokeChannels;
@@ -214,71 +301,93 @@ export type InvokeReq<C extends InvokeChannelName> = InvokeChannels[C]['req'];
 export type InvokeRes<C extends InvokeChannelName> = InvokeChannels[C]['res'];
 export type EventPayload<C extends EventChannelName> = EventChannels[C];
 
-export const INVOKE_CHANNELS: readonly InvokeChannelName[] = [
-  'app:ping',
-  'apps:list',
-  'apps:add',
-  'apps:update',
-  'apps:remove',
-  'apps:detect',
-  'apps:findByPath',
-  'proc:start',
-  'proc:stop',
-  'proc:restart',
-  'proc:list',
-  'tasks:list',
-  'tasks:add',
-  'tasks:update',
-  'tasks:remove',
-  'tasks:reorder',
-  'task:start',
-  'task:stop',
-  'task:list',
-  'task:readBuffer',
-  'task:tailBuffer',
-  'task:clearBuffer',
-  'task:resize',
-  'runs:list',
-  'env:files',
-  'settings:get',
-  'settings:set',
-  'update:install',
-  'openIn:caps',
-  'openIn:open',
-  'db:export',
-  'db:reset',
-  'db:path',
-  'env:getGlobal',
-  'env:setGlobal',
-  'env:getApp',
-  'env:setApp',
-  'env:getTask',
-  'env:setTask',
-  'folders:list',
-  'folders:rename',
-  'folders:clear',
-  'node:list',
-  'node:resolve',
-  'dialog:browse'
-] as const;
+/**
+ * The runtime allow-lists the preload bridge checks against. Derived from a `satisfies
+ * Record<…, true>` map so that adding a channel to the type but forgetting it here is a
+ * COMPILE error (and vice-versa) - the arrays can no longer silently drift from the types.
+ */
+const INVOKE_CHANNEL_FLAGS = {
+  'app:ping': true,
+  'apps:list': true,
+  'apps:add': true,
+  'apps:create': true,
+  'apps:update': true,
+  'apps:remove': true,
+  'apps:detect': true,
+  'apps:findByPath': true,
+  'apps:scanFolder': true,
+  'proc:start': true,
+  'proc:stop': true,
+  'proc:restart': true,
+  'proc:list': true,
+  'tasks:list': true,
+  'tasks:listAll': true,
+  'tasks:add': true,
+  'tasks:update': true,
+  'tasks:remove': true,
+  'tasks:reorder': true,
+  'task:start': true,
+  'task:stop': true,
+  'task:list': true,
+  'task:readBuffer': true,
+  'task:tailBuffer': true,
+  'task:clearBuffer': true,
+  'task:subscribeLogs': true,
+  'task:unsubscribeLogs': true,
+  'logs:searchAll': true,
+  'task:resize': true,
+  'runs:list': true,
+  'env:files': true,
+  'settings:get': true,
+  'settings:set': true,
+  'update:install': true,
+  'update:check': true,
+  'logs:path': true,
+  'logs:openFolder': true,
+  'openIn:caps': true,
+  'openIn:open': true,
+  'db:export': true,
+  'db:reset': true,
+  'db:path': true,
+  'env:getGlobal': true,
+  'env:setGlobal': true,
+  'env:getApp': true,
+  'env:setApp': true,
+  'env:getTask': true,
+  'env:setTask': true,
+  'folders:list': true,
+  'folders:rename': true,
+  'folders:clear': true,
+  'node:list': true,
+  'node:resolve': true,
+  'dialog:browse': true
+} satisfies Record<InvokeChannelName, true>;
 
-export const EVENT_CHANNELS: readonly EventChannelName[] = [
-  'task:log',
-  'task:status',
-  'task:stats',
-  'task:ports',
-  'proc:status',
-  'env:fileChanged',
-  'update:available',
-  'update:progress',
-  'update:ready',
-  'deepLink:focusApp',
-  'deepLink:unknownPath',
-  'deepLink:confirmStart',
-  'menu:openSettings',
-  'menu:addApp',
-  'menu:newFolder'
-] as const;
+export const INVOKE_CHANNELS = Object.keys(INVOKE_CHANNEL_FLAGS) as InvokeChannelName[];
+
+const EVENT_CHANNEL_FLAGS = {
+  'task:log': true,
+  'task:status': true,
+  'task:stats': true,
+  'task:ports': true,
+  'proc:status': true,
+  'env:fileChanged': true,
+  'update:available': true,
+  'update:progress': true,
+  'update:ready': true,
+  'update:error': true,
+  'update:notAvailable': true,
+  'deepLink:focusApp': true,
+  'deepLink:unknownPath': true,
+  'deepLink:confirmStart': true,
+  'menu:openSettings': true,
+  'menu:addApp': true,
+  'menu:newFolder': true,
+  'menu:checkUpdates': true,
+  'menu:openLogs': true
+} satisfies Record<EventChannelName, true>;
+
+export const EVENT_CHANNELS = Object.keys(EVENT_CHANNEL_FLAGS) as EventChannelName[];
 
 export type Api = {
   invoke: <C extends InvokeChannelName>(

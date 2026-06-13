@@ -8,11 +8,11 @@ import { X, Search, ChevronUp, ChevronDown, Type, ArrowDown } from 'lucide-react
 import type { TaskId } from '@shared/types';
 import { cn } from '../lib/cn';
 
-const LIVE_THEME = {
+const LIVE_THEME_DARK = {
   // Chrome aligned to the zinc + teal app theme; the ANSI 16 below stay a readable,
   // vivid log palette (terminal output colors are conventionally their own set).
   background: '#141417', // a hair darker than the zinc-900 base for subtle terminal depth
-  foreground: '#e4e4e7', // zinc-200 — soft white
+  foreground: '#e4e4e7', // zinc-200 - soft white
   cursor: '#2dd4bf', // harbor teal
   selectionBackground: '#3f3f46', // zinc-700
   black: '#1a1b26',
@@ -32,6 +32,36 @@ const LIVE_THEME = {
   brightCyan: '#0db9d7',
   brightWhite: '#c0caf5'
 };
+
+const LIVE_THEME_LIGHT = {
+  // Chrome aligned to the slate + teal light app theme; ANSI 16 are darkened so
+  // colored log output stays legible against the near-white background.
+  background: '#fbfcfd', // slate-1 - matches the app's light base
+  foreground: '#11181c', // slate-12 - primary text
+  cursor: '#0d9488', // teal-600 - harbor brand at light contrast
+  selectionBackground: '#cdd2d8', // slate-6 selection wash
+  black: '#11181c',
+  red: '#c5253a',
+  green: '#207935',
+  yellow: '#946800',
+  blue: '#0552b5',
+  magenta: '#8347b9',
+  cyan: '#0e7090',
+  white: '#687076',
+  brightBlack: '#889096',
+  brightRed: '#dc3545',
+  brightGreen: '#2a9e44',
+  brightYellow: '#ad7c00',
+  brightBlue: '#0a6bd6',
+  brightMagenta: '#9c52c4',
+  brightCyan: '#1090b8',
+  brightWhite: '#11181c'
+};
+
+/** Pick the xterm theme matching the current app theme (the `light` class on `<html>`). */
+function currentTheme(): typeof LIVE_THEME_DARK {
+  return document.documentElement.classList.contains('light') ? LIVE_THEME_LIGHT : LIVE_THEME_DARK;
+}
 
 const MIN_FONT = 9;
 const MAX_FONT = 22;
@@ -88,7 +118,10 @@ export const LogTerminal = forwardRef<LogTerminalRef, { taskId: TaskId }>(functi
       lineHeight: 1.2,
       scrollback: 10000,
       convertEol: true,
-      theme: LIVE_THEME,
+      // Render an off-screen ARIA live region so screen readers announce log output.
+      // WebGL rendering still applies to the visible canvas; this only adds the a11y mirror.
+      screenReaderMode: true,
+      theme: currentTheme(),
       allowProposedApi: true
     });
     const fit = new FitAddon();
@@ -149,10 +182,28 @@ export const LogTerminal = forwardRef<LogTerminalRef, { taskId: TaskId }>(functi
     };
     term.onScroll(onScroll);
 
+    // Gate streaming: tell main we want live output for this task. Main only forwards
+    // `task:log` for subscribed tasks once any subscription exists; the buffer replay above
+    // (task:readBuffer) covers anything emitted before this point, so nothing is missed.
+    void window.api.invoke('task:subscribeLogs', { id: taskId });
+
     const offLog = window.api.on('task:log', (e) => {
       if (e.taskId !== taskId) return;
       term.write(e.chunk);
     });
+
+    // Keep the xterm palette in sync with the app theme. The app toggles `light`/`dark`
+    // classes on <html> (see useTheme); a MutationObserver on that attribute flips the
+    // terminal theme immediately, and `settings-changed` covers theme=system re-evaluation.
+    const applyTheme = (): void => {
+      term.options.theme = currentTheme();
+    };
+    const themeObserver = new MutationObserver(applyTheme);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class']
+    });
+    window.addEventListener('settings-changed', applyTheme);
 
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
@@ -172,7 +223,11 @@ export const LogTerminal = forwardRef<LogTerminalRef, { taskId: TaskId }>(functi
     return () => {
       cancelled = true;
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('settings-changed', applyTheme);
+      themeObserver.disconnect();
       offLog();
+      // Stop live forwarding for this task before tearing down (or before switching tasks).
+      void window.api.invoke('task:unsubscribeLogs', { id: taskId });
       ro.disconnect();
       term.dispose();
       termRef.current = null;
@@ -219,7 +274,7 @@ export const LogTerminal = forwardRef<LogTerminalRef, { taskId: TaskId }>(functi
     <div className="relative h-full w-full">
       <div ref={hostRef} className="h-full w-full" data-selectable />
 
-      {/* Floating compact toolbar — bottom-right when scrolled up, top-right always for tools */}
+      {/* Floating compact toolbar - bottom-right when scrolled up, top-right always for tools */}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-base/90 px-1 py-0.5 backdrop-blur">
         <ToolbarButton
           title="Find (⌘ F)"

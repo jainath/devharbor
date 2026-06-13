@@ -1,4 +1,4 @@
-# 00 — Overview
+# 00 - Overview
 
 ## Problem
 
@@ -8,19 +8,19 @@ Developers juggling several local Node.js services hit the same friction every d
 - "Which Node version does this repo want again?" → `nvm use`, hope `.nvmrc` is right.
 - Editing `.env` in a text editor, restarting by hand, forgetting which port a service is on.
 - No single view of "what is currently running on my machine."
-- Switching between npm / yarn / pnpm projects — easy to use the wrong one.
+- Switching between npm / yarn / pnpm projects - easy to use the wrong one.
 
 ## Vision
 
 One desktop app that knows about all your local Node.js projects and gives you a calm, dense, professional interface to run them.
 
-The product the user has in their head: "Postman, but for local dev servers." Not literally Postman — we are not an API client — but the same *feel*: a sidebar of registered things, a main area showing the active one, sensible defaults, keyboard-driven, dev-tool aesthetic.
+The product the user has in their head: "Postman, but for local dev servers." Not literally Postman - we are not an API client - but the same *feel*: a sidebar of registered things, a main area showing the active one, sensible defaults, keyboard-driven, dev-tool aesthetic.
 
 ## Primary user
 
 A working developer on macOS who:
 
-- Maintains 3–20 local Node.js projects
+- Maintains 3-20 local Node.js projects
 - Uses some combination of npm, yarn, and pnpm
 - Has nvm (or fnm, or Volta, or asdf) installed
 - Wants tighter feedback loops and less terminal-tab archaeology
@@ -30,11 +30,11 @@ A working developer on macOS who:
 1. **Register** local app directories by browsing to them.
 2. **Detect** Node version, package manager, and available scripts automatically; allow overrides.
 3. **Run** the chosen script with the correct Node version and package manager.
-4. **Stop** apps cleanly — entire process tree, no orphans.
-5. **Env vars** — global defaults + per-app overrides, layered, with `.env` file integration.
-6. **Logs** — live stdout/stderr per app, real terminal rendering, searchable history.
-7. **Dashboard** — at-a-glance view of running apps, their ports, CPU/RAM.
-8. **Dev-friendly extras** — Cmd-K palette, port detection with clickable links, restart-on-change, `.env` file watching, crash recovery actions.
+4. **Stop** apps cleanly - entire process tree, no orphans.
+5. **Env vars** - global defaults + per-app overrides, layered, with `.env` file integration.
+6. **Logs** - live stdout/stderr per app, real terminal rendering, searchable history.
+7. **Dashboard** - at-a-glance view of running apps, their ports, CPU/RAM.
+8. **Dev-friendly extras** - Cmd-K palette, port detection with clickable links, restart-on-change, `.env` file watching, crash recovery actions.
 
 ## Non-goals (explicitly out of scope for v1)
 

@@ -13,6 +13,10 @@ import { useStore } from '../store/store';
 import { cn } from '../lib/cn';
 import { useDebouncedSave } from '../lib/useDebouncedSave';
 import { ErrorBanner } from './ErrorBanner';
+import { useDialog } from '../hooks/useDialog';
+import { openConfirm } from './PromptModal';
+
+const TASK_EDITOR_TITLE_ID = 'task-editor-title';
 
 const EMPTY_TASKS: Task[] = [];
 
@@ -33,6 +37,9 @@ export function TaskEditor({
   const [detection, setDetection] = useState<DetectionResult | null>(null);
   const dragIdRef = useRef<TaskId | null>(null);
   const [dragOverId, setDragOverId] = useState<TaskId | null>(null);
+
+  // Overlay dialog: focus trap, Escape to close, focus restore, aria wiring.
+  const { dialogProps } = useDialog(onClose, TASK_EDITOR_TITLE_ID);
 
   useEffect(() => {
     void window.api.invoke('apps:detect', { path: appPath }).then(setDetection);
@@ -80,12 +87,22 @@ export function TaskEditor({
 
   const applyPatch = (patch: Partial<Task>): void => {
     if (!editing) return;
-    // Optimistic local update — input echoes immediately.
+    // Optimistic local update - input echoes immediately.
     upsertTask({ ...editing, ...patch, updatedAt: Date.now() } as Task);
     queueSave({ id: editing.id, patch });
   };
 
   const onRemove = async (id: TaskId): Promise<void> => {
+    // Match the task-strip context menu, which always confirms before deleting.
+    // Removing a task also discards its task-scoped env vars, so this is destructive.
+    const name = tasks.find((t) => t.id === id)?.name ?? 'task';
+    const ok = await openConfirm({
+      title: `Remove task "${name}"?`,
+      description: 'Its task-scoped environment variables are deleted too.',
+      danger: true,
+      confirmLabel: 'Remove'
+    });
+    if (!ok) return;
     setError(null);
     flushSave();
     try {
@@ -99,10 +116,15 @@ export function TaskEditor({
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
-      <div className="flex h-full max-h-[680px] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-border bg-base shadow-2xl">
+      <div
+        {...dialogProps}
+        className="flex h-full max-h-[680px] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-border bg-base shadow-2xl"
+      >
         <header className="flex items-center justify-between border-b border-border px-4 py-3">
           <div>
-            <h2 className="text-sm font-medium text-fg">Tasks</h2>
+            <h2 id={TASK_EDITOR_TITLE_ID} className="text-sm font-medium text-fg">
+              Tasks
+            </h2>
             <p className="mt-0.5 text-[11px] text-fg-subtle">
               Define what this app runs. Multiple tasks start in dependency order.
             </p>
@@ -267,6 +289,7 @@ function TaskForm({
       <div className="flex items-start justify-between">
         <div>
           <input
+            data-autofocus
             value={task.name}
             onChange={(e) => void onChange({ name: e.target.value })}
             className="w-full rounded-md bg-transparent text-base font-medium text-fg outline-none focus:ring-1 focus:ring-accent"
@@ -304,7 +327,7 @@ function TaskForm({
               onChange={(e) => void onChange({ script: e.target.value || null })}
               className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-fg"
             >
-              <option value="">— select —</option>
+              <option value=""> - select - </option>
               {scriptChoices.map((s) => (
                 <option key={s} value={s}>
                   {s} {detection?.scripts[s] ? `(${detection.scripts[s]})` : ''}
@@ -510,7 +533,7 @@ function RadioPill({
 function readinessLabel(r: ReadinessSignal): string {
   switch (r.kind) {
     case 'none':
-      return '—';
+      return '-';
     case 'port':
       return `:${r.port}`;
     case 'log':

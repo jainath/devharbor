@@ -41,6 +41,26 @@ export class TaskRegistry {
     return rows.map(rowToTask);
   }
 
+  /**
+   * Load every task across every app in a single query, grouped by app id.
+   * The boot path needs tasks for all apps at once; doing this as one ordered
+   * scan replaces an N+1 of per-app `list()` calls. Rows arrive pre-sorted by
+   * (app_id, position, created_at) so each group is already in position order.
+   */
+  listAll(): Record<string, Task[]> {
+    const rows = db()
+      .prepare<unknown[], TaskRow>(
+        'SELECT * FROM tasks ORDER BY app_id ASC, position ASC, created_at ASC'
+      )
+      .all();
+    const grouped: Record<string, Task[]> = {};
+    for (const row of rows) {
+      const task = rowToTask(row);
+      (grouped[task.appId] ??= []).push(task);
+    }
+    return grouped;
+  }
+
   get(id: TaskId): Task | null {
     const row = db()
       .prepare<unknown[], TaskRow>('SELECT * FROM tasks WHERE id = ?')
@@ -112,7 +132,7 @@ export class TaskRegistry {
   update(id: TaskId, patch: Partial<Task>): Task {
     const current = this.get(id);
     if (!current) throw new Error(`Task not found: ${id}`);
-    // Phase 7: tasks.env_overrides is frozen — the source of truth is now
+    // Phase 7: tasks.env_overrides is frozen - the source of truth is now
     // env_vars rows with task_id set. Ignore any patch.envOverrides so the
     // legacy JSON column can never silently drift from the rows.
     const next: Task = {
@@ -171,7 +191,7 @@ export class TaskRegistry {
     const dependents = siblings.filter((t) => t.dependsOn.includes(id));
     if (dependents.length > 0) {
       throw new Error(
-        `Can't remove "${task.name}" — these tasks depend on it: ${dependents.map((d) => d.name).join(', ')}`
+        `Can't remove "${task.name}" - these tasks depend on it: ${dependents.map((d) => d.name).join(', ')}`
       );
     }
     db().prepare('DELETE FROM tasks WHERE id = ?').run(id);
@@ -230,6 +250,23 @@ export class TaskRegistry {
   }
 }
 
+/**
+ * Parse a JSON column defensively. A single hand-edited or corrupt cell must not
+ * take down the whole tasks:list query (IMPROVEMENT-PLAN 8.3): a bad row should
+ * degrade to its fallback rather than throw and blank out every task in the app.
+ * `null` is treated as "absent" and returns the fallback without warning, since
+ * NULL is a legitimate empty state for these columns.
+ */
+function safeJson<T>(raw: string | null, fallback: T): T {
+  if (raw == null) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    console.warn('TaskRegistry: ignoring corrupt JSON column, using fallback', err);
+    return fallback;
+  }
+}
+
 function rowToTask(r: TaskRow): Task {
   return {
     id: r.id as TaskId,
@@ -241,14 +278,15 @@ function rowToTask(r: TaskRow): Task {
     customCommand: r.custom_command,
     workingDirOverride: r.working_dir_override,
     packageManagerOverride: (r.package_manager_override as PackageManager | null) ?? null,
+    // Only parse when the column is non-null so the absent case stays null (no warning).
     nodeVersionPrefOverride: r.node_version_pref_override
-      ? (JSON.parse(r.node_version_pref_override) as NodeVersionPref)
+      ? safeJson<NodeVersionPref | null>(r.node_version_pref_override, null)
       : null,
-    dependsOn: (JSON.parse(r.depends_on) as string[]).map((s) => s as TaskId),
-    readiness: JSON.parse(r.readiness) as ReadinessSignal,
+    dependsOn: safeJson<string[]>(r.depends_on, []).map((s) => s as TaskId),
+    readiness: safeJson<ReadinessSignal>(r.readiness, { kind: 'none' }),
     oneShot: !!r.one_shot,
     enabled: !!r.enabled,
-    envOverrides: JSON.parse(r.env_overrides) as Record<string, string>,
+    envOverrides: safeJson<Record<string, string>>(r.env_overrides, {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };

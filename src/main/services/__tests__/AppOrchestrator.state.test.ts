@@ -59,7 +59,7 @@ describe('AppOrchestrator app-state on stop', () => {
     runner.emit('status', { taskId: 't1', appId: 'a1', state, ready, exitCode: null });
   };
 
-  it('settles on "exited" after a stop — never reverts to "idle"', () => {
+  it('settles on "exited" after a stop - never reverts to "idle"', () => {
     // Running.
     driveTask('running', true);
     expect(orch.appState('a1' as never)).toBe('running');

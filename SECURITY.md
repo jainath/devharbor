@@ -11,7 +11,7 @@ DevHarbor is in active development. Only the latest released version receives fi
 
 ## Reporting an issue
 
-Please report security concerns **privately** — do **not** open a public GitHub issue.
+Please report security concerns **privately** - do **not** open a public GitHub issue.
 
 - Preferred: GitHub's **[private vulnerability reporting](https://github.com/jainath/devharbor/security/advisories/new)**
   (repo → **Security** tab → **Report a vulnerability**).

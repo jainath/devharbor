@@ -19,7 +19,7 @@ export interface OpenInCapabilities {
 
 /**
  * macOS .app bundle names per editor. We detect by bundle existence and launch via
- * `open -a "<App Name>"` — NOT by probing CLI shims (`code`, `cursor`, `subl`) on PATH.
+ * `open -a "<App Name>"` - NOT by probing CLI shims (`code`, `cursor`, `subl`) on PATH.
  *
  * Why: a GUI-launched macOS app inherits a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`)
  * that excludes `/usr/local/bin` and `/opt/homebrew/bin` where those CLI shims live. So
@@ -44,7 +44,7 @@ function bundleExists(bundles: string[]): boolean {
 
 /**
  * Ask LaunchServices whether an app of this display name is installed ANYWHERE
- * (Setapp, nested folders, /Applications/Utilities, etc.) — `open -a "<name>"` resolves
+ * (Setapp, nested folders, /Applications/Utilities, etc.) - `open -a "<name>"` resolves
  * the same way, so this matches what the launch will actually do. Returns false on any
  * error (osascript exits non-zero when the app is unknown).
  */
@@ -69,7 +69,7 @@ export class OpenIn {
   async caps(): Promise<OpenInCapabilities> {
     if (this.capsCache) return this.capsCache;
     // Fast path: bundle present in the standard dirs. Fallback: ask LaunchServices, which
-    // finds the app wherever it's installed — matching what `open -a` will actually do.
+    // finds the app wherever it's installed - matching what `open -a` will actually do.
     const detect = async (e: { appName: string; bundles: string[] }): Promise<boolean> =>
       bundleExists(e.bundles) || launchServicesKnows(e.appName);
     const [vscode, cursor, sublime] = await Promise.all([

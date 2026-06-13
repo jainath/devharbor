@@ -1,4 +1,4 @@
-# 02 — Data Model
+# 02 - Data Model
 
 All persistent state lives in one SQLite file at `userData/devharbor.db`. In-memory state (running processes, ring buffers, pidusage samples) is **not** persisted.
 
@@ -16,12 +16,13 @@ One row per registered project.
 | `color` | TEXT | Hex like `#7aa2f7`, for the sidebar dot; auto-assigned, user-editable |
 | `icon` | TEXT | Optional emoji or short tag |
 | `node_version_pref` | TEXT | One of: `auto` (use `.nvmrc`/`.node-version`/`engines.node`), `system`, or an explicit version like `20.11.0` |
-| `package_manager` | TEXT | `npm` \| `yarn` \| `pnpm` \| `bun` — null means "detect each time" |
-| `default_script` | TEXT | e.g. `dev` — remembered between sessions |
+| `package_manager` | TEXT | `npm` \| `yarn` \| `pnpm` \| `bun` - null means "detect each time" |
+| `default_script` | TEXT | e.g. `dev` - remembered between sessions |
 | `custom_command` | TEXT | If set, used instead of `<pm> run <script>`; raw shell line |
 | `working_dir` | TEXT | Defaults to `path`; can be a subdir for monorepos |
 | `auto_restart_on_change` | INTEGER | 0/1; off by default |
 | `watch_globs` | TEXT | JSON array of globs when `auto_restart_on_change=1` |
+| `auto_start` | INTEGER | 0/1; start this app automatically when DevHarbor launches (migration `0007`, 1.1.0) |
 | `port_hint` | INTEGER | Last detected port; cached for the dashboard |
 | `tags` | TEXT | JSON array of strings |
 | `folder` | TEXT | Phase 8: visual grouping in the sidebar. NULL = "(ungrouped)". Single-level (no nesting). Tags are orthogonal facets; folder is each app's one canonical home. |
@@ -42,33 +43,41 @@ Layered key/value store. **Three scopes** since Phase 7: `global` (`app_id IS NU
 | `app_id` | TEXT FK → apps(id) ON DELETE CASCADE | NULL = global scope |
 | `task_id` | TEXT FK → tasks(id) ON DELETE CASCADE | NULL = not task-scoped. Phase 7 addition. |
 | `key` | TEXT NOT NULL | |
-| `value` | TEXT NOT NULL | Stored as text. Secrets are NOT encrypted in v1 — see Security note below. |
+| `value` | TEXT NOT NULL | Plaintext for non-secrets. Since 1.1.0 (migration `0006` era), rows with `is_secret = 1` are encrypted at rest via Electron `safeStorage` and stored as `enc1:<base64>`; decrypted transparently in `EnvStore`. Falls back to plaintext when OS encryption is unavailable. |
 | `enabled` | INTEGER NOT NULL | 0/1, allows toggling without delete |
-| `is_secret` | INTEGER NOT NULL | 0/1; masks in UI by default |
+| `is_secret` | INTEGER NOT NULL | 0/1; masks in UI, triggers at-rest encryption |
 | `note` | TEXT | Free-form |
 | `created_at` | INTEGER NOT NULL | |
 | `updated_at` | INTEGER NOT NULL | |
 
-Indices: `idx_env_vars_scope (app_id, task_id, key)`.
+Indices: `idx_env_vars_scope (app_id, task_id, key)` plus, since migration `0006`, three
+**partial unique indexes** that enforce per-scope key uniqueness correctly:
+
+- `uq_env_global` - `UNIQUE(key) WHERE app_id IS NULL AND task_id IS NULL`
+- `uq_env_app` - `UNIQUE(app_id, key) WHERE app_id IS NOT NULL AND task_id IS NULL`
+- `uq_env_task` - `UNIQUE(task_id, key) WHERE task_id IS NOT NULL`
+
+(0001's table-level `UNIQUE(app_id, key)` was dropped in `0006`: it made a task-scoped
+override of an app-scoped key - the whole point of layering - impossible to save, while
+being inert for global rows.)
 
 **Scope layering** (later wins) when `EnvBuilder` composes a task's effective env:
-1. Sanitized OS base (HOME, USER, LANG, …)
+1. Sanitized OS base (HOME, USER, LANG, SSH_AUTH_SOCK, …)
 2. User's resolved PATH (Node bin prepended)
-3. Global rows (`app_id IS NULL AND task_id IS NULL`, enabled)
-4. App rows (`app_id = ? AND task_id IS NULL`, enabled)
-5. **Task rows (`task_id = ?`, enabled)** — Phase 7
-6. `.env` / `.env.local` from cwd
+3. Project `.env` files from cwd - `.env`, `.env.development`, `.env.local`,
+   `.env.development.local` (dotenv precedence). Process-control keys (`PATH`,
+   `NODE_OPTIONS`, `NODE_PATH`, `DYLD_*`, `LD_*`) are stripped from file vars.
+4. Global rows (`app_id IS NULL AND task_id IS NULL`, enabled)
+5. App rows (`app_id = ? AND task_id IS NULL`, enabled)
+6. **Task rows (`task_id = ?`, enabled)** - Phase 7
 7. Hard-coded runtime (FORCE_COLOR, TERM)
 
-The `tasks.env_overrides` JSON column (legacy) is migrated into `env_vars` rows once at Phase 7 boot and the column is then left as inert backfill source (kept for safe rollback; no longer read at runtime).
+> Changed in 1.1.0: user-configured rows now sit **above** project `.env` files (the UI is
+> the source of truth), and project files can never set process-control variables.
 
-**Layering order at runtime** (later overrides earlier):
-
-1. Sanitized OS base env (`HOME`, `USER`, `PATH`, etc.)
-2. Global `env_vars` rows (`app_id IS NULL`, `enabled = 1`)
-3. App `env_vars` rows (`app_id = ?`, `enabled = 1`)
-4. Parsed `.env`, `.env.local`, `.env.${NODE_ENV}` from the project directory (in dotenv-cli precedence)
-5. Hard-coded runtime values (`FORCE_COLOR=1`, `TERM=xterm-256color`)
+The `tasks.env_overrides` JSON column (legacy) is migrated into `env_vars` rows on first
+read and then stamped to `'{}'`, so deleted task vars can never resurrect from the frozen
+JSON on a later boot.
 
 The UI surfaces this layering as inheritance indicators.
 
@@ -124,7 +133,7 @@ Indices: `idx_tasks_app` on `(app_id, position)`.
 - App-level Start: topo-sort enabled tasks by `depends_on`; for each task in order, wait for all predecessors to be `ready`, then spawn. Within one topological level, tasks start in `position` order.
 - App-level Stop: reverse-topo. SIGTERM each task; after the global `kill_grace_ms`, escalate to SIGKILL on the process group; `tree-kill` fallback.
 - App-level Restart: stop + wait + start with the same task set.
-- Per-task Start/Stop is also exposed (mainly for debugging — start one task without its dependents). The orchestrator does not auto-start deps when a single task is started manually.
+- Per-task Start/Stop is also exposed (mainly for debugging - start one task without its dependents). The orchestrator does not auto-start deps when a single task is started manually.
 - A non-`one_shot` task that exits is treated as crashed at the app level. The app status reflects the worst task state.
 - Cycles in `depends_on` are rejected at save time with a clear error citing the cycle.
 
@@ -287,9 +296,16 @@ export interface NodeInstallation {
 
 ## Security note on secrets
 
-In v1, env var values (including `is_secret=1`) are stored **in plaintext** in the SQLite file. The DB lives in the user's `Application Support` directory, which is protected by macOS file permissions but not encrypted at rest by us.
+Since 1.1.0, env var values with `is_secret = 1` are **encrypted at rest** using Electron's
+`safeStorage` (macOS Keychain-backed). Encrypted values are stored as `enc1:<base64>` and
+decrypted transparently inside `EnvStore`, so the editor and `EnvBuilder` always see
+plaintext. A one-shot boot migration re-encrypts any pre-1.1.0 plaintext secret rows.
+Non-secret values remain plaintext. When OS encryption is unavailable, saves fall back to
+plaintext rather than failing; an undecryptable value is returned raw, never destroyed.
 
-This is an explicit v1 trade-off: it keeps setup simple and matches what every existing dev tool in this category does (Postman, Insomnia, etc.). Phase 5+ can move secret values to the macOS Keychain via the `keytar` package, with a per-app keychain entry. The `is_secret` flag is captured now so a migration is straightforward.
+Residual exposure: decrypted values flow over typed IPC to the env editor on demand (a
+single-user desktop trade-off), and any process running as the same user can use the same
+Keychain entry. The DB lives in the user's `Application Support` directory.
 
 ## Migrations
 
@@ -298,7 +314,12 @@ This is an explicit v1 trade-off: it keeps setup simple and matches what every e
 | File | Purpose |
 |---|---|
 | `0001_init.sql` | `apps`, `env_vars`, `run_history`, `settings` + indices, seed default settings |
-| `0002_tasks.sql` | `tasks` table + index. Schema-only — no data backfill. |
+| `0002_tasks.sql` | `tasks` table + index. Schema-only - no data backfill. |
+| `0003_run_history_tasks.sql` | `run_history.task_id` + `task_name` for per-task run rows. |
+| `0004_env_task_scope.sql` | `env_vars.task_id` for the third (task) scope. |
+| `0005_app_folders.sql` | `apps.folder` for sidebar grouping. |
+| `0006_env_scope_unique.sql` | Rebuilds `env_vars` without 0001's table-level `UNIQUE(app_id,key)`; adds the three per-scope partial unique indexes (see `env_vars` above); de-dupes any pre-existing violations keeping the most recently updated row. |
+| `0007_app_autostart.sql` | `apps.auto_start` - start the app automatically when DevHarbor launches. |
 
 ### Backfill for existing apps (Phase 1.5)
 
@@ -311,7 +332,7 @@ For each app where (apps:tasks count) == 0:
   else:                     do nothing (the app will require explicit task creation)
 ```
 
-`apps.default_script` and `apps.custom_command` are retained for now as a convenience — when a user has just one task, the App-level header still shows "Script: dev" by reflecting that single task's value. A future migration can drop those columns once the UI stops referencing them directly.
+`apps.default_script` and `apps.custom_command` are retained for now as a convenience - when a user has just one task, the App-level header still shows "Script: dev" by reflecting that single task's value. A future migration can drop those columns once the UI stops referencing them directly.
 
 ### `run_history` + tasks
 
@@ -321,4 +342,4 @@ For each app where (apps:tasks count) == 0:
 ALTER TABLE run_history ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;
 ```
 
-This goes in `0003_run_history_tasks.sql` and is Phase 2 work — included here for completeness.
+This goes in `0003_run_history_tasks.sql` and is Phase 2 work - included here for completeness.
