@@ -381,6 +381,12 @@ This is the foundation for: monorepos (one task per workspace), single-repo mult
   - `none` - proceed immediately after spawn (default, current Phase 1 behaviour).
   - `port:N` - wait until the task's process group is listening on port `N`. Implementation: `lsof -iTCP -sTCP:LISTEN -P -n` filtered by PID group, polled every 500ms.
   - `log:/regex/` - wait until a stdout chunk matches. Useful for "ready in Xms" banners or anything not bound to a port.
+  - `http:url` - poll `GET url` (~700ms interval) until it returns the expected status
+    (default: any 2xx/3xx). The right probe for a service that opens its port before it
+    can actually serve (DB/cache still connecting) - point it at `/health` or `/ready`.
+    `https` URLs to loopback hosts skip certificate validation (local self-signed dev
+    certs); non-loopback URLs validate normally. Resolves not-ready if the task exits
+    first. Configurable in the task editor and over MCP via `set_readiness`.
   - `exit:0` - task is `oneShot`; ready means it exited with the expected code. Required for any `oneShot` task.
   - `delay:N ms` - fixed timer, last-resort fallback.
 - **Dependency graph** - `dependsOn` is a DAG. Cycles rejected at save time with a clear error citing the cycle. Tasks at the same topological level start in parallel, in `position` order for UI determinism.
@@ -471,6 +477,62 @@ This is the foundation for: monorepos (one task per workspace), single-repo mult
 - Right-click → Move to folder → "New folder…" → type "Side projects" → app appears under a new `▾ Side projects (1)` section, sorted into place.
 - Right-click `Work` header → Rename → "Clients" → both apps move to `▾ Clients (2)`.
 - Filter input "auth" with two `Work` apps (one matches) → `▾ Work (1)` shows the match, `▸ Personal (0)` and other folders auto-collapse with zero count.
+
+---
+
+## F22. MCP server for coding agents  *(post-v1)*
+
+**Summary.** An opt-in, localhost-only HTTP server that exposes DevHarbor to MCP (Model
+Context Protocol) clients, so a coding agent can register and operate the user's dev servers
+*through DevHarbor* instead of spawning `npm run dev` in a shell it then loses track of. The
+full design (architecture, transport, security, the 22-tool catalog) lives in
+[`07-mcp-server.md`](07-mcp-server.md); this is the feature-level summary.
+
+**Behaviour.**
+
+- **Off by default.** Enabled under Settings -> MCP server, which also shows live status,
+  the port, the auth token, and a copy-paste client config block.
+- **Loopback only.** Binds `127.0.0.1:<port>` (default 6872). Every request must carry a
+  loopback `Host` (exact match, blocks DNS-rebinding) and, if present, a loopback `Origin`.
+- **Bearer token by default.** A 32-byte token (encrypted at rest via the same Keychain path
+  as env secrets) is required on every request; comparison is constant-time. Auth can be
+  turned off for clients that cannot send headers, with a clear warning that any local
+  process could then run commands as the user.
+- **Stateless Streamable HTTP.** A fresh MCP server is built per request; no sessions.
+- **22 tools.** Read (overview, list/get apps, tasks, running, logs, search, ports, env
+  vars, node versions, folder scan) and mutate (add/update/remove apps, add/remove tasks,
+  start/stop/restart apps and tasks, set env var, set readiness probe). Apps are addressed
+  by id, exact name, or absolute path.
+- **Monorepos.** `add_app` with `workspaceTasks: true` creates one task per detected
+  workspace package (same detection as the UI's add flow); `add_task`/`remove_task` let an
+  agent shape the task set - per-task working directory, `dependsOn` ordering, `oneShot`
+  for migrations/builds - so a monorepo is one app with per-service tasks, not N apps.
+- **Secrets protected.** Stored secret env values are masked in env responses and redacted
+  from any log-bearing response.
+- **Honest readiness.** A task without a readiness probe reports `ready: null`, never a
+  vacuous `true`; a factual `listening` flag reports open ports separately from verified
+  readiness; start results carry a tri-state `readinessVerified` plus the task's recent
+  output so the caller can judge for itself; and the `set_readiness` tool lets an agent
+  configure a probe (port / log / http / delay) so verification becomes achievable.
+- **Ports, labeled and on time.** Start results wait briefly for port detection instead of
+  returning empty, and each detected port is labeled with the owning process - which port
+  is which service in a monorepo task that fans out into several servers.
+- **Optional HTTPS.** `mcp_https` serves the endpoint over TLS with a self-signed
+  localhost certificate generated on first use; certificate problems fail closed.
+- **Clean lifecycle.** The listener starts on boot when enabled, restarts on a port change,
+  and closes before running tasks are torn down on quit so an in-flight tool call can never
+  spawn a process that outlives the app.
+
+**Acceptance.**
+
+- Enabling the server in Settings shows "Running at http://127.0.0.1:6872/mcp"; disabling it
+  stops the listener.
+- A request with `Host: evil.com` is rejected 403; a `GET /mcp` is 405; a request with no or
+  a wrong bearer token is 401.
+- An agent calls `add_app` with a project path, then `start_app`, and the app runs under
+  DevHarbor with logs and ports visible in the UI - no shell `npm run dev` involved.
+- `get_logs` on an app whose dev server printed a secret env value returns that value
+  redacted.
 
 ---
 

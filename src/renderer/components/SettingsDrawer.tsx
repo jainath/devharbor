@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { X, Download, AlertTriangle } from 'lucide-react';
+import { X, Download, AlertTriangle, Copy, RefreshCw, Check, Eye, EyeOff, Info } from 'lucide-react';
 import type { NodeInstallation } from '@shared/types';
-import type { SettingsState } from '@shared/ipc';
+import type { McpStatus, SettingsState } from '@shared/ipc';
 import { ErrorBanner } from './ErrorBanner';
 import { openConfirm } from './PromptModal';
 import { useDialog } from '../hooks/useDialog';
@@ -217,6 +217,8 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }): JSX.Elemen
                 </div>
               </Section>
 
+              <McpSection settings={settings} update={update} />
+
               <Section title="Danger zone">
                 <div className="text-[11px] text-fg-subtle">
                   Database lives at <span className="font-mono">{dbPath}</span>
@@ -384,4 +386,216 @@ function NumberInput({
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/** A small copy-to-clipboard button that flips to a check for a moment after copying. */
+function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        });
+      }}
+      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-sm text-fg hover:bg-elevated"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-success-fg" /> : <Copy className="h-3.5 w-3.5" />}
+      {copied ? 'Copied' : label}
+    </button>
+  );
+}
+
+/**
+ * MCP server controls: enable toggle, live status, port, auth token, and copy-paste client
+ * config. Status arrives via the `mcp:statusChanged` event so a port-in-use error (or a
+ * successful start) shows without a manual refresh.
+ */
+function McpSection({
+  settings,
+  update
+}: {
+  settings: SettingsState;
+  update: (patch: Partial<SettingsState>) => Promise<void>;
+}): JSX.Element {
+  const [status, setStatus] = useState<McpStatus | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [reveal, setReveal] = useState(false);
+
+  const refreshToken = (): void => {
+    void window.api.invoke('mcp:token', undefined).then(setToken);
+  };
+
+  useEffect(() => {
+    void window.api.invoke('mcp:status', undefined).then(setStatus);
+    if (settings.mcp_require_auth) refreshToken();
+    const off = window.api.on('mcp:statusChanged', (s) => setStatus(s));
+    return off;
+    // Re-subscribe when auth flips so the token field appears/updates.
+  }, [settings.mcp_require_auth]);
+
+  const url =
+    status?.url ?? `${settings.mcp_https ? 'https' : 'http'}://127.0.0.1:${settings.mcp_port}/mcp`;
+  const clientConfig = JSON.stringify(
+    {
+      mcpServers: {
+        devharbor: {
+          type: 'http',
+          url,
+          ...(settings.mcp_require_auth
+            ? { headers: { Authorization: `Bearer ${token ?? '<token>'}` } }
+            : {})
+        }
+      }
+    },
+    null,
+    2
+  );
+
+  return (
+    <Section title="MCP server">
+      <div className="text-[11px] text-fg-subtle">
+        Let coding agents manage your dev servers through DevHarbor over local HTTP. The server
+        listens on 127.0.0.1 only. Holding the token lets a client register a folder and run its
+        scripts, so treat it like a password.
+      </div>
+
+      <Toggle
+        label="Enable MCP server"
+        description="Expose app management tools (list, add, start, stop, logs) to MCP clients."
+        checked={settings.mcp_enabled}
+        onChange={(v) => void update({ mcp_enabled: v })}
+      />
+
+      {settings.mcp_enabled && (
+        <>
+          <Field label="Status" description="Live state of the local server.">
+            <div className="flex items-center gap-2 text-sm">
+              <span
+                className={cn(
+                  'inline-block h-2 w-2 rounded-full',
+                  status?.running ? 'bg-success-fg' : status?.lastError ? 'bg-danger-fg' : 'bg-elevated'
+                )}
+              />
+              {status?.running ? (
+                <span className="font-mono text-[11px] text-fg">{status.url}</span>
+              ) : status?.lastError ? (
+                <span className="text-[11px] text-danger-fg">{status.lastError}</span>
+              ) : (
+                <span className="text-[11px] text-fg-subtle">Stopped</span>
+              )}
+            </div>
+          </Field>
+
+          <Field label="Port" description="Listen port (1024-65535). The server restarts when changed.">
+            <NumberInput
+              value={settings.mcp_port}
+              onCommit={(v) => void update({ mcp_port: clamp(Math.round(v), 1024, 65535) })}
+              step={1}
+              min={1024}
+              max={65535}
+            />
+          </Field>
+
+          <Toggle
+            label="Use HTTPS"
+            description="Serve over TLS with a self-signed localhost certificate. Clients must trust the certificate."
+            checked={settings.mcp_https}
+            onChange={(v) => void update({ mcp_https: v })}
+          />
+
+          {settings.mcp_https && status?.certPath && (
+            <Field
+              label="Certificate"
+              description="Point your client at this file (e.g. NODE_EXTRA_CA_CERTS) or add it to your keychain."
+            >
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="max-w-56 truncate font-mono text-[10.5px] text-fg-subtle"
+                  title={status.certPath}
+                >
+                  {status.certPath}
+                </span>
+                <CopyButton text={status.certPath} label="Copy path" />
+              </div>
+            </Field>
+          )}
+
+          <Toggle
+            label="Require auth token"
+            description="Require a bearer token on every request. Recommended."
+            checked={settings.mcp_require_auth}
+            onChange={(v) => void update({ mcp_require_auth: v })}
+          />
+
+          {!settings.mcp_require_auth && (
+            <div className="flex items-start gap-2 rounded-md border border-border bg-surface px-2 py-1.5 text-[11px] text-fg-subtle">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fg-subtle" />
+              <span>
+                Without a token, any program running on this Mac can control your apps through
+                DevHarbor. Fine on a personal machine; turn it back on if other people log in
+                here or you run software you do not trust.
+              </span>
+            </div>
+          )}
+
+          {settings.mcp_require_auth && (
+            <Field label="Auth token" description="Send as an Authorization: Bearer header.">
+              <div className="flex items-center gap-1.5">
+                <input
+                  readOnly
+                  value={reveal ? token ?? '' : token ? '•'.repeat(24) : ''}
+                  className="w-40 rounded-md border border-border bg-surface px-2 py-1 font-mono text-[11px] text-fg"
+                />
+                <button
+                  onClick={() => setReveal((r) => !r)}
+                  title={reveal ? 'Hide' : 'Reveal'}
+                  className="rounded-md border border-border bg-surface p-1.5 text-fg hover:bg-elevated"
+                >
+                  {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </button>
+                {token && <CopyButton text={token} />}
+                <button
+                  onClick={async () => {
+                    const ok = await openConfirm({
+                      title: 'Regenerate token?',
+                      description:
+                        'The current token stops working immediately. Any connected client must be updated with the new token.',
+                      confirmLabel: 'Regenerate',
+                      danger: true
+                    });
+                    if (!ok) return;
+                    const next = await window.api.invoke('mcp:regenerateToken', undefined);
+                    setToken(next);
+                  }}
+                  title="Regenerate token"
+                  className="rounded-md border border-border bg-surface p-1.5 text-fg hover:bg-elevated"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </Field>
+          )}
+
+          {status?.tokenStoredPlaintext && (
+            <div className="rounded-md border border-danger-border bg-danger-bg px-2 py-1 text-[11px] text-danger-fg">
+              The macOS keychain was unavailable, so the token is stored unencrypted. File
+              permissions are its only protection.
+            </div>
+          )}
+
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-sm text-fg">Client config</span>
+              <CopyButton text={clientConfig} label="Copy config" />
+            </div>
+            <pre className="max-h-40 overflow-auto rounded-md border border-border bg-base/60 p-2 font-mono text-[10.5px] leading-relaxed text-fg-subtle">
+              {clientConfig}
+            </pre>
+          </div>
+        </>
+      )}
+    </Section>
+  );
 }

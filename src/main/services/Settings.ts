@@ -12,6 +12,10 @@ export type SettingsMap = {
   tray_enabled: boolean;
   run_history_limit: number;
   readiness_timeout_ms: number;
+  mcp_enabled: boolean;
+  mcp_port: number;
+  mcp_require_auth: boolean;
+  mcp_https: boolean;
 };
 
 const DEFAULTS: SettingsMap = {
@@ -25,7 +29,11 @@ const DEFAULTS: SettingsMap = {
   launch_at_login: false,
   tray_enabled: true,
   run_history_limit: 500,
-  readiness_timeout_ms: 60_000
+  readiness_timeout_ms: 60_000,
+  mcp_enabled: false,
+  mcp_port: 6872,
+  mcp_require_auth: true,
+  mcp_https: false
 };
 
 export class Settings {
@@ -45,7 +53,13 @@ export class Settings {
       launch_at_login: parseBool(map.get('launch_at_login'), DEFAULTS.launch_at_login),
       tray_enabled: parseBool(map.get('tray_enabled'), DEFAULTS.tray_enabled),
       run_history_limit: parseNumber(map.get('run_history_limit'), DEFAULTS.run_history_limit),
-      readiness_timeout_ms: parseNumber(map.get('readiness_timeout_ms'), DEFAULTS.readiness_timeout_ms)
+      readiness_timeout_ms: parseNumber(map.get('readiness_timeout_ms'), DEFAULTS.readiness_timeout_ms),
+      mcp_enabled: parseBool(map.get('mcp_enabled'), DEFAULTS.mcp_enabled),
+      // Clamp on read as well as write: a hand-edited or corrupt row must not make the
+      // MCP server try to bind a privileged or nonsense port.
+      mcp_port: clampPort(parseNumber(map.get('mcp_port'), DEFAULTS.mcp_port)),
+      mcp_require_auth: parseBool(map.get('mcp_require_auth'), DEFAULTS.mcp_require_auth),
+      mcp_https: parseBool(map.get('mcp_https'), DEFAULTS.mcp_https)
     };
   }
 
@@ -75,7 +89,11 @@ export class Settings {
       'launch_at_login',
       'tray_enabled',
       'run_history_limit',
-      'readiness_timeout_ms'
+      'readiness_timeout_ms',
+      'mcp_enabled',
+      'mcp_port',
+      'mcp_require_auth',
+      'mcp_https'
     ]);
     const tx = db().transaction(() => {
       for (const [k, v] of Object.entries(patch)) {
@@ -104,4 +122,10 @@ function parseBool(v: string | undefined, fallback: boolean): boolean {
 function parseTheme(v: string | undefined): SettingsMap['theme'] {
   if (v === 'light' || v === 'dark' || v === 'system') return v;
   return 'system';
+}
+
+/** Keep the MCP port in the unprivileged range; anything else falls back to the default. */
+function clampPort(n: number): number {
+  if (!Number.isInteger(n) || n < 1024 || n > 65535) return DEFAULTS.mcp_port;
+  return n;
 }

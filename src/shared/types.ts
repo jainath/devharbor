@@ -72,6 +72,10 @@ export type ReadinessSignal =
   | { kind: 'none' }
   | { kind: 'port'; port: number; host?: string }
   | { kind: 'log'; regex: string; flags?: string }
+  /** Ready when an HTTP GET to `url` returns `status` (default any 2xx/3xx). Best fit for a
+   *  service that opens its port before it can actually serve (DB/cache still connecting):
+   *  point it at a /health or /ready endpoint. TLS is not certificate-verified (loopback). */
+  | { kind: 'http'; url: string; status?: number }
   | { kind: 'exit'; code?: number }
   | { kind: 'delay'; ms: number };
 
@@ -103,6 +107,10 @@ export interface RunningTask {
   pid: number;
   state: ProcessState;
   ready: boolean;
+  /** Readiness kind the LIVE watcher was created with at spawn. Distinct from the task's
+   *  stored readiness config, which can be edited (set_readiness) without restarting - so a
+   *  reader must use THIS to decide whether `ready` is a verified answer or a vacuous one. */
+  readinessKind: ReadinessSignal['kind'];
   startedAt: number;
   command: string;
   nodeVersion: string;

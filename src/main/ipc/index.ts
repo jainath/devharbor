@@ -1,6 +1,6 @@
 import { BrowserWindow, dialog, ipcMain, Notification } from 'electron';
-import type { InvokeChannelName, InvokeChannels, ImportCandidate, GlobalLogMatch } from '@shared/ipc';
-import type { AppId, EnvVar, TaskId } from '@shared/types';
+import type { InvokeChannelName, InvokeChannels } from '@shared/ipc';
+import type { AppId, TaskId } from '@shared/types';
 import { closeDb, db, dbFile } from '../db/index.js';
 import { logger } from '../services/Logger';
 import { TrayController, type TrayApp } from '../services/TrayController';
@@ -10,7 +10,10 @@ import { NodeResolver } from '../services/NodeResolver';
 import { TaskRegistry } from '../services/TaskRegistry';
 import { TaskRunner, type TaskLogEvent, type TaskStatusEvent } from '../services/TaskRunner';
 import { AppOrchestrator } from '../services/AppOrchestrator';
+import { AppOps } from '../services/AppOps';
 import { RunHistory } from '../services/RunHistory';
+import { McpService } from '../mcp/McpService';
+import type { McpToolContext } from '../mcp/context';
 import { EnvStore } from '../services/EnvStore';
 import { EnvBuilder } from '../services/EnvBuilder';
 import { EnvFileWatcher, type EnvFileChange } from '../services/EnvFileWatcher';
@@ -21,8 +24,8 @@ import { DeepLinks } from '../services/DeepLinks';
 import { Updater } from '../services/Updater';
 import { OpenIn } from '../services/OpenIn';
 import { app as electronApp, dialog as electronDialog } from 'electron';
-import { existsSync, readdirSync, realpathSync, renameSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, realpathSync, renameSync } from 'node:fs';
+import { join } from 'node:path';
 import type { StatsTick } from '../services/StatsMonitor';
 import type { PortsEvent } from '../services/PortDetector';
 
@@ -41,6 +44,17 @@ export interface IpcRuntime {
   stopAllRunning: () => Promise<void>;
   /** Reset per-renderer state (log subscriptions) when the window reloads/navigates. */
   onRendererReload: () => void;
+  /**
+   * Enter quit teardown: block/cancel starts so nothing new spawns. Idempotent; call at the
+   * committed point of BOTH quit paths (including the zero-task fast path) before proceeding.
+   */
+  beginShutdown: () => void;
+  /**
+   * Tear down long-lived, externally-facing services (the MCP HTTP listener). Called at the
+   * START of the quit teardown - before stopAllRunning - so no in-flight MCP request can
+   * spawn a process that then outlives the app as an orphan.
+   */
+  disposeServices: () => Promise<void>;
 }
 
 export function registerAllIpcHandlers(
@@ -252,6 +266,55 @@ export function registerAllIpcHandlers(
     if (evt.state === 'exited' || evt.state === 'crashed') taskReady.delete(evt.taskId);
   });
 
+  // --- Shared app-operation layer (used by IPC handlers AND the MCP server) --------------------
+  const appOps = new AppOps(registry, taskRegistry, envStore, detector, orchestrator, {
+    watchEnvFiles: (id, path) => envFileWatcher.watch(id, path),
+    unwatchEnvFiles: (id) => envFileWatcher.unwatch(id),
+    syncRestartWatcher,
+    unwatchRestart: (id) => restartWatcher.unwatch(id),
+    refreshTray: () => tray.refresh()
+  });
+
+  // --- MCP server (F22): expose app management to coding agents over local HTTP ----------------
+  const mcpContext: McpToolContext = {
+    appVersion: electronApp.getVersion(),
+    registry,
+    taskRegistry,
+    orchestrator,
+    runner,
+    envStore,
+    detector,
+    nodes,
+    runHistory,
+    settings,
+    appOps,
+    envFiles: (appId) => {
+      const a = registry.get(appId);
+      return a ? envFileWatcher.list(a.path) : [];
+    },
+    // MCP-driven mutations bypass the renderer's own IPC flow, so nudge it to re-sync its
+    // cached app/task/running view. Debounced on the renderer side. Must never throw: the
+    // mutation has already committed, and the webContents can be mid-destroy during a
+    // window close - that must not turn a successful tool call into an error result.
+    notifyChanged: () => {
+      try {
+        const w = win();
+        if (w && !w.isDestroyed()) w.webContents.send('state:invalidate', {});
+      } catch {
+        // best-effort notification
+      }
+    }
+  };
+  const mcpService = new McpService(
+    mcpContext,
+    settings,
+    join(electronApp.getPath('userData'), 'mcp-tls'),
+    (status) => {
+      win()?.webContents.send('mcp:statusChanged', status);
+    }
+  );
+  mcpService.start();
+
   // --- Auto-start flagged apps on launch (IMPROVEMENT-PLAN 14.6) -------------------------------
   for (const a of registry.list()) {
     if (a.autoStart) {
@@ -269,131 +332,21 @@ export function registerAllIpcHandlers(
     tray.refresh();
     return app;
   });
-  register('apps:update', ({ id, patch }) => {
-    const before = registry.get(id);
-    const app = registry.update(id, patch);
-    if (!before || before.path !== app.path) {
-      envFileWatcher.watch(app.id, app.path);
-    }
-    // Resync restart watcher if its config changed (or path changed).
-    if (
-      !before ||
-      before.autoRestartOnChange !== app.autoRestartOnChange ||
-      before.path !== app.path ||
-      JSON.stringify(before.watchGlobs) !== JSON.stringify(app.watchGlobs)
-    ) {
-      syncRestartWatcher(app.id);
-    }
-    tray.refresh(); // rename / folder changes show in the tray menu
-    return app;
-  });
+  register('apps:update', ({ id, patch }) => appOps.updateApp(id, patch));
   register('apps:remove', ({ id }) => {
-    // Only block removal while the app is actually LIVE. The sticky outcome design means an
-    // app that ever ran reports 'exited'/'crashed' forever, so the old `!== 'idle'` guard made
-    // every previously-run app permanently unremovable (IMPROVEMENT-PLAN 5.2).
-    const st = orchestrator.appState(id as AppId);
-    if (st === 'running' || st === 'starting' || st === 'exiting') {
-      throw new Error('Stop the app before removing it.');
-    }
-    envFileWatcher.unwatch(id);
-    restartWatcher.unwatch(id);
-    orchestrator.clearOutcome(id as AppId);
-    registry.remove(id);
-    tray.refresh();
+    // Guard + watcher teardown live in AppOps so the MCP remove path enforces them too.
+    appOps.removeApp(id as AppId);
   });
   register('apps:detect', ({ path }) => detector.detect(path));
 
-  // Atomic create: app + first task + env vars in ONE main-process handler with rollback, so a
+  // Atomic create: app + first task + env vars in ONE transaction-ish flow with rollback, so a
   // partial failure (or a renderer reload mid-flow) can't leave an orphan app row
-  // (IMPROVEMENT-PLAN 12.7). FK cascade cleans tasks/env if we roll back.
-  register('apps:create', async (input) => {
-    const real = realpathSync(input.path);
-    if (registry.getByPath(real)) {
-      throw new Error('This folder is already registered.');
-    }
-    const app = await registry.add(input.path);
-    try {
-      const patched = registry.update(app.id, {
-        name: input.name?.trim() || app.name,
-        nodeVersionPref: input.nodeVersionPref ?? { kind: 'auto' },
-        packageManager: input.packageManager ?? null,
-        defaultScript: input.defaultScript ?? null
-      });
-      const taskSpecs = [...(input.firstTask ? [input.firstTask] : []), ...(input.tasks ?? [])];
-      for (const spec of taskSpecs) {
-        taskRegistry.add(app.id, {
-          name: spec.name,
-          commandKind: spec.commandKind,
-          script: spec.script ?? null,
-          customCommand: spec.customCommand ?? null,
-          workingDirOverride: spec.workingDirOverride ?? null,
-          enabled: true
-        });
-      }
-      if (input.envVars && input.envVars.length > 0) {
-        const vars: EnvVar[] = input.envVars
-          .filter((v) => v.key.trim())
-          .map((v) => ({
-            id: '',
-            appId: app.id,
-            key: v.key.trim(),
-            value: v.value,
-            enabled: true,
-            isSecret: v.isSecret ?? false
-          }));
-        envStore.setApp(app.id, vars);
-      }
-      envFileWatcher.watch(app.id, app.path);
-      syncRestartWatcher(app.id);
-      tray.refresh();
-      return patched;
-    } catch (err) {
-      try {
-        registry.remove(app.id);
-      } catch {
-        /* best-effort rollback */
-      }
-      throw err;
-    }
-  });
+  // (IMPROVEMENT-PLAN 12.7). Delegated to AppOps so IPC and MCP share one implementation.
+  register('apps:create', (input) => appOps.createApp(input));
 
-  // Shallow-scan a folder for package.json projects (bulk import). One level deep; skips
-  // already-registered folders' "alreadyRegistered" flag so the picker can disable them.
-  register('apps:scanFolder', async ({ dir }) => {
-    const out: ImportCandidate[] = [];
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return out;
-    }
-    for (const name of entries) {
-      if (name.startsWith('.')) continue;
-      const full = join(dir, name);
-      try {
-        if (!statSync(full).isDirectory()) continue;
-        if (!existsSync(join(full, 'package.json'))) continue;
-      } catch {
-        continue;
-      }
-      let real = full;
-      try {
-        real = realpathSync(full);
-      } catch {
-        // use raw
-      }
-      const detection = await detector.detect(full);
-      out.push({
-        path: full,
-        name: basename(real),
-        alreadyRegistered: !!registry.getByPath(real),
-        packageManager: detection.packageManager,
-        suggestedScript: detection.suggestedDefaultScript,
-        scripts: Object.keys(detection.scripts)
-      });
-    }
-    return out.sort((a, b) => a.name.localeCompare(b.name));
-  });
+  // Shallow-scan a folder for package.json projects (bulk import). One level deep; the
+  // "alreadyRegistered" flag lets the picker disable folders that are already added.
+  register('apps:scanFolder', ({ dir }) => appOps.scanFolder(dir));
   register('apps:findByPath', ({ path }) => {
     try {
       const real = realpathSync(path);
@@ -442,38 +395,12 @@ export function registerAllIpcHandlers(
     logSubs.delete(id);
   });
 
-  // Global log search: fan over every live task's ring buffer in main and return matches.
-  register('logs:searchAll', ({ query, flags, limit }) => {
-    const out: GlobalLogMatch[] = [];
-    if (!query.trim()) return out;
-    let re: RegExp;
-    try {
-      re = new RegExp(query, flags ?? 'i');
-    } catch {
-      // Fall back to a literal substring match if the regex is invalid.
-      re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    }
-    const cap = limit ?? 500;
-    for (const rt of runner.list()) {
-      const app = registry.get(rt.appId);
-      const tasks = taskRegistry.list(rt.appId);
-      const taskName = tasks.find((t) => t.id === rt.taskId)?.name ?? '';
-      const buf = runner.readBuffer(rt.taskId);
-      for (const line of buf.split('\n')) {
-        if (re.test(line)) {
-          out.push({
-            appId: rt.appId,
-            taskId: rt.taskId,
-            appName: app?.name ?? '',
-            taskName,
-            line: line.length > 2000 ? line.slice(0, 2000) : line
-          });
-          if (out.length >= cap) return out;
-        }
-      }
-    }
-    return out;
-  });
+  // Global log search: delegated to AppOps (shared with the MCP search_logs tool). Regex with
+  // an 'i' default keeps the renderer's power-user behavior; AppOps additionally covers tasks
+  // that exited in the last ~10 minutes, not just live ones.
+  register('logs:searchAll', ({ query, flags, limit }) =>
+    appOps.searchLogs({ query, regex: true, flags, limit })
+  );
 
   register('runs:list', ({ appId, limit }) => runHistory.list(appId, limit));
 
@@ -523,8 +450,22 @@ export function registerAllIpcHandlers(
     if (typeof patch.launch_at_login === 'boolean') {
       electronApp.setLoginItemSettings({ openAtLogin: patch.launch_at_login, openAsHidden: true });
     }
+    // Start/stop/rebind the MCP listener when any of its settings changed. applySettings
+    // decides whether a listener bounce is actually needed (auth toggle needs none).
+    if (
+      typeof patch.mcp_enabled === 'boolean' ||
+      typeof patch.mcp_port === 'number' ||
+      typeof patch.mcp_require_auth === 'boolean' ||
+      typeof patch.mcp_https === 'boolean'
+    ) {
+      void mcpService.applySettings();
+    }
     return next;
   });
+
+  register('mcp:status', () => mcpService.status());
+  register('mcp:token', () => mcpService.getToken());
+  register('mcp:regenerateToken', () => mcpService.regenerateToken());
 
   register('update:install', () => {
     updater.quitAndInstall();
@@ -600,9 +541,19 @@ export function registerAllIpcHandlers(
 
   return {
     runningTaskCount: () => orchestrator.runningTaskCount(),
-    stopAllRunning: () => orchestrator.stopAllRunning(),
+    // Quit-path teardown: flag + cancel in-flight starts FIRST so queued/blocked starts don't
+    // spawn (or hang the quit). The tray's plain "Stop all" calls orchestrator.stopAllRunning
+    // directly, without this flag, so it stays reusable.
+    beginShutdown: () => orchestrator.beginShutdown(),
+    stopAllRunning: () => {
+      orchestrator.beginShutdown();
+      return orchestrator.stopAllRunning();
+    },
     // A renderer reload (⌘R is kept in prod) loses the renderer-side unsubscribe calls; if the
     // stale subscriptions lingered, log forwarding would stay gated to dead taskIds forever.
-    onRendererReload: () => logSubs.clear()
+    onRendererReload: () => logSubs.clear(),
+    // Close the MCP listener BEFORE tasks are torn down so an in-flight tool call can't spawn
+    // a process that outlives the quit as an orphan.
+    disposeServices: () => mcpService.dispose()
   };
 }

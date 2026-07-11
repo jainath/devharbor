@@ -22,7 +22,10 @@ function makeFakes() {
   };
 
   const tasks = {
-    list: (_appId: string) => [{ id: 't1', appId: 'a1', enabled: true }]
+    list: (_appId: string) => [
+      { id: 't1', appId: 'a1', enabled: true, dependsOn: [], position: 0, readiness: { kind: 'none' } }
+    ],
+    get: (_id: string) => ({ id: 't1', appId: 'a1', enabled: true, dependsOn: [], position: 0, readiness: { kind: 'none' } })
   };
 
   const apps = {
@@ -98,6 +101,40 @@ describe('AppOrchestrator app-state on stop', () => {
   it('never-run app is "idle" (no sticky outcome)', () => {
     setRunList([]);
     expect(orch.appState('a1' as never)).toBe('idle');
+  });
+
+  it('beginShutdown() cancels an in-flight start blocked on readiness (quit must not hang)', async () => {
+    // A start whose readiness never resolves: without cancellation, startApp would sit on
+    // the readiness wait for up to readiness_timeout_ms, hanging the quit teardown.
+    let started = 0;
+    const neverReady = new Promise<boolean>(() => {}); // never resolves
+    const fakeRunner = runner as unknown as {
+      start: (t: unknown) => Promise<{ snapshot: unknown; awaitReady: Promise<boolean> }>;
+      isRunning: (id: string) => boolean;
+      isReady: (id: string) => boolean;
+    };
+    fakeRunner.isRunning = () => false;
+    fakeRunner.isReady = () => false;
+    fakeRunner.start = () => {
+      started++;
+      setRunList([{ taskId: 't1', appId: 'a1', state: 'running', ready: false }]);
+      return Promise.resolve({ snapshot: {}, awaitReady: neverReady });
+    };
+
+    const startP = orch.startApp('a1' as never);
+    // Let doStartApp reach the readiness race + register its cancel hook.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(started).toBe(1);
+
+    // Quit begins: this must make the blocked start bail promptly.
+    orch.beginShutdown();
+
+    // If cancellation works, startApp settles quickly; race it against a short timeout.
+    const settled = await Promise.race([
+      startP.then(() => 'settled'),
+      new Promise((r) => setTimeout(() => r('hung'), 1000))
+    ]);
+    expect(settled).toBe('settled');
   });
 
   it('primeOutcome() persists a Stopped/Crashed badge across restart (boot seeding)', () => {

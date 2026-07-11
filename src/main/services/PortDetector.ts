@@ -16,11 +16,22 @@ export interface PortsEvent {
   ports: number[];
 }
 
+/** Which process inside a task's tree owns a listening port (for labeling, e.g. one turbo
+    task fanning out into web + preview + api servers). `pid`/`process` are null for ports
+    only hinted from stdout that lsof has not confirmed yet. */
+export interface PortOwner {
+  port: number;
+  pid: number | null;
+  process: string | null;
+}
+
 interface Tracked {
   taskId: TaskId;
   appId: AppId;
   pid: number;
   knownPorts: Set<number>;
+  /** Last confirmed owner (pid + shortened command) per port, from the lsof/ps tick. */
+  owners: Map<number, { pid: number; process: string | null }>;
   /** Ports inferred from stdout (e.g. "localhost:3000"); merged with lsof results. */
   hinted: Set<number>;
   /** Per-hint count of consecutive polls where lsof did NOT confirm the port. */
@@ -48,6 +59,7 @@ export class PortDetector extends EventEmitter {
       appId,
       pid,
       knownPorts: new Set(),
+      owners: new Map(),
       hinted: new Set(),
       hintMisses: new Map()
     });
@@ -55,6 +67,21 @@ export class PortDetector extends EventEmitter {
     // Immediate tick so quickly-listening processes (Vite, Astro) show their port
     // without waiting for the 2s interval.
     void this.tick();
+  }
+
+  /**
+   * Per-port ownership for a task: which descendant process listens on each known port.
+   * Hinted-but-unconfirmed ports come back with a null pid/process.
+   */
+  portOwners(taskId: TaskId): PortOwner[] {
+    const t = this.tracked.get(taskId);
+    if (!t) return [];
+    const out: PortOwner[] = [];
+    for (const port of [...t.knownPorts].sort((a, b) => a - b)) {
+      const owner = t.owners.get(port);
+      out.push({ port, pid: owner?.pid ?? null, process: owner?.process ?? null });
+    }
+    return out;
   }
 
   untrack(taskId: TaskId): void {
@@ -99,8 +126,9 @@ export class PortDetector extends EventEmitter {
     try {
       // ONE `ps` snapshot for the whole machine instead of one `pgrep -P` per process in
       // every task's tree, every tick (IMPROVEMENT-PLAN 9.2). With N tasks this turns
-      // ~25-35 forks/sec into 2: one ps + one lsof.
-      const childrenByPpid = await snapshotProcessTree();
+      // ~25-35 forks/sec into 2: one ps + one lsof. The same snapshot carries each pid's
+      // command line so listening ports can be labeled with their owning process.
+      const { childrenByPpid, commandByPid } = await snapshotProcessTree();
 
       const descByTask = new Map<TaskId, Set<number>>();
       const allPids = new Set<number>();
@@ -146,6 +174,17 @@ export class PortDetector extends EventEmitter {
         // instead of blanking every task's chips because one pid in the union was stale.
         if (lsofResult.failed && observed.size === 0) continue;
 
+        // Record which descendant owns each confirmed port (labels for the UI/MCP). Rebuilt
+        // per successful tick so a restarted child updates its pid/command.
+        const owners = new Map<number, { pid: number; process: string | null }>();
+        for (const pid of desc) {
+          const ps = portsByPid.get(pid);
+          if (!ps) continue;
+          const command = commandByPid.get(pid);
+          for (const p of ps) owners.set(p, { pid, process: command ? shortCommand(command) : null });
+        }
+        t.owners = owners;
+
         const merged = new Set<number>([...observed, ...t.hinted]);
         if (!setsEqual(t.knownPorts, merged)) {
           t.knownPorts = merged;
@@ -165,28 +204,50 @@ export class PortDetector extends EventEmitter {
 }
 
 /**
- * One `ps` for the whole process table → map of ppid → child pids. Zombies are excluded:
- * a reaped-but-unwaited child would otherwise poison the batched lsof call below (lsof
- * exits non-zero when ANY pid in `-p` can't be opened).
+ * One `ps` for the whole process table → ppid → child pids, plus each pid's command line
+ * (for port-ownership labels). Zombies are excluded: a reaped-but-unwaited child would
+ * otherwise poison the batched lsof call below (lsof exits non-zero when ANY pid in `-p`
+ * can't be opened).
  */
-async function snapshotProcessTree(): Promise<Map<number, number[]>> {
-  const byPpid = new Map<number, number[]>();
+async function snapshotProcessTree(): Promise<{
+  childrenByPpid: Map<number, number[]>;
+  commandByPid: Map<number, string>;
+}> {
+  const childrenByPpid = new Map<number, number[]>();
+  const commandByPid = new Map<number, string>();
   try {
-    const { stdout } = await execFileP('ps', ['-axo', 'pid=,ppid=,stat=']);
+    // args= is last on purpose: it contains spaces, so everything after the third field
+    // belongs to it.
+    const { stdout } = await execFileP('ps', ['-axo', 'pid=,ppid=,stat=,args=']);
     for (const line of stdout.split(/\r?\n/)) {
-      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)/);
+      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
       if (!m) continue;
       if (m[3]!.startsWith('Z')) continue; // zombie - skip
       const pid = Number(m[1]);
       const ppid = Number(m[2]);
-      const arr = byPpid.get(ppid);
+      const arr = childrenByPpid.get(ppid);
       if (arr) arr.push(pid);
-      else byPpid.set(ppid, [pid]);
+      else childrenByPpid.set(ppid, [pid]);
+      if (m[4]) commandByPid.set(pid, m[4]);
     }
   } catch {
     // ps failed - return what we have (empty), callers treat as "no descendants".
   }
-  return byPpid;
+  return { childrenByPpid, commandByPid };
+}
+
+/**
+ * Shorten a raw `ps args` command line into a human label: absolute path tokens reduced to
+ * their basename, capped length. Processes that retitle themselves (next-server (v15))
+ * come through as-is. Exported for tests.
+ */
+export function shortCommand(args: string): string {
+  const shortened = args
+    .trim()
+    .split(/\s+/)
+    .map((tok) => (tok.startsWith('/') && tok.length > 1 ? (tok.split('/').pop() ?? tok) : tok))
+    .join(' ');
+  return shortened.length > 80 ? `${shortened.slice(0, 77)}...` : shortened;
 }
 
 /** BFS the snapshot to collect a root pid and all its descendants (bounded depth). */

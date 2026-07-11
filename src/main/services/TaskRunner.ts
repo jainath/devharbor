@@ -113,6 +113,11 @@ export class TaskRunner extends EventEmitter {
     this.logs.clear(taskId);
   }
 
+  /** Task ids with a retained log buffer (live or recently-exited). For global search. */
+  bufferedTaskIds(): TaskId[] {
+    return this.logs.bufferedTaskIds();
+  }
+
   resize(taskId: TaskId, cols: number, rows: number): void {
     const t = this.tracked.get(taskId);
     if (!t) return;
@@ -139,6 +144,9 @@ export class TaskRunner extends EventEmitter {
   }
 
   isRunning(taskId: TaskId): boolean {
+    // `pending` covers the mid-spawn window (env still building, PTY not yet tracked) so
+    // a concurrent remove cannot slip between "not tracked yet" and the actual spawn.
+    if (this.pending.has(taskId)) return true;
     const t = this.tracked.get(taskId);
     return !!t && (t.state === 'starting' || t.state === 'running');
   }
@@ -602,6 +610,9 @@ function toRunningTask(t: Tracked): RunningTask {
     pid: t.pid,
     state: t.state,
     ready: t.ready,
+    // The readiness kind the LIVE watcher was built from (captured at spawn), so readers can
+    // tell a verified `ready` from a vacuous one even after the stored config is edited.
+    readinessKind: t.task.readiness.kind,
     startedAt: t.startedAt,
     command: t.command,
     nodeVersion: t.nodeVersion,

@@ -33,6 +33,12 @@ export class AppOrchestrator extends EventEmitter {
   // (IMPROVEMENT-PLAN 7.4). Different apps still run concurrently.
   private readonly ops = new Map<AppId, Promise<unknown>>();
 
+  // Set once teardown begins (stopAllRunning on quit). A start that was already ENQUEUED
+  // behind an in-flight op for the same app - e.g. an MCP start_app dispatched just before
+  // quit - would otherwise run runner.start() AFTER the teardown snapshot and spawn a PTY
+  // that outlives the app as an orphan. Queued starts check this flag and no-op instead.
+  private shuttingDown = false;
+
   // Cancellation hooks for in-flight starts. The lock serialises a queued stop BEHIND the
   // start - and doStartApp can sit awaiting readiness for up to readiness_timeout_ms per
   // level, which is exactly when users reach for Stop. stopApp/restartApp invoke this
@@ -125,6 +131,9 @@ export class AppOrchestrator extends EventEmitter {
   }
 
   private async doStartApp(appId: AppId): Promise<void> {
+    // If teardown began while this start sat queued behind another op, do not spawn - the
+    // quit path has already (or is about to) snapshot running tasks and would miss us.
+    if (this.shuttingDown) return;
     const allTasks = this.tasks.list(appId).filter((t) => t.enabled);
     if (allTasks.length === 0) {
       throw new Error('No enabled tasks for this app. Add one via Manage tasks.');
@@ -277,6 +286,7 @@ export class AppOrchestrator extends EventEmitter {
   }
 
   async startTask(taskId: TaskId): Promise<RunningTask> {
+    if (this.shuttingDown) throw new Error('DevHarbor is shutting down.');
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     const { snapshot } = await this.runner.start(task);
@@ -303,7 +313,26 @@ export class AppOrchestrator extends EventEmitter {
    * as orphans when the PTY master closes (IMPROVEMENT-PLAN 5.9). Mid-spawn starts are
    * included - runner.stop() awaits the pending spawn before killing it.
    */
+  /**
+   * Enter app-quit teardown: block new AND already-queued starts permanently (the process is
+   * going away), and CANCEL every in-flight start so a readiness wait can't hold the quit
+   * hostage for up to readiness_timeout_ms per level. Cancelled starts break out immediately
+   * (their partial tasks land in runner.list() and are stopped by the following
+   * stopAllRunning). Deliberately separate from stopAllRunning - the tray's "Stop all" uses
+   * that too, and a plain stop-all must NOT leave the orchestrator refusing future starts.
+   */
+  beginShutdown(): void {
+    this.shuttingDown = true;
+    for (const cancel of this.startCancels.values()) cancel();
+  }
+
   async stopAllRunning(): Promise<void> {
+    // During quit (beginShutdown called): let any op queued behind an in-flight one drain to
+    // its now-no-op completion BEFORE snapshotting - otherwise a start queued behind a prior
+    // stop/restart could reach runner.start() after the snapshot and orphan a fresh PTY.
+    if (this.shuttingDown) {
+      await Promise.allSettled([...this.ops.values()]);
+    }
     const ids = new Set<TaskId>([
       ...this.runner.list().map((t) => t.taskId),
       ...this.runner.pendingStartIds()
