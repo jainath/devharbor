@@ -255,6 +255,8 @@ function readinessLabel(r: ReadinessSignal): string {
       return `:${r.port}`;
     case 'log':
       return 'log';
+    case 'http':
+      return 'http';
     case 'exit':
       return r.code === undefined || r.code === 0 ? '✓' : `exit ${r.code}`;
     case 'delay':

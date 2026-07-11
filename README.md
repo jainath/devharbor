@@ -28,6 +28,50 @@ Website: [www.devharbor.app](https://www.devharbor.app)
   **encrypted at rest** (macOS Keychain). Your settings always win over a repo's `.env`.
 - **Keyboard-first** - ⌘K palette, folders/tags, dashboard with live CPU/memory, per-app
   auto-start + launch at login, signed/notarized builds with auto-update.
+- **MCP server for coding agents** - opt-in, loopback-only HTTP server that lets an AI coding
+  assistant list, add, start, stop, and inspect your apps *through DevHarbor* instead of
+  spawning `npm run dev` in a shell it then loses track of. See [MCP server](#mcp-server).
+
+## MCP server
+
+DevHarbor doubles as an MCP server, so a coding agent (Claude Code, Cursor, or anything
+else that speaks MCP) manages your dev servers through DevHarbor instead of running them
+in its own shell. Servers an agent starts this way outlive the agent's session, show up in
+the app like everything else, and get logs, port tracking, readiness checks, and clean
+shutdown for free. The desktop updates live as the agent works.
+
+22 tools cover the full surface: list, add, update, and remove apps; add and remove tasks;
+start, stop, and restart apps or individual tasks; read and search logs; inspect ports,
+run history, and Node versions; read and set env vars; scan a folder for projects to
+register; and configure readiness probes so the agent can tell "port is open" apart from
+"actually ready to serve".
+
+Monorepos are first-class: `add_app` with `workspaceTasks: true` registers the repo once
+and creates one task per workspace package (pnpm, yarn, or npm workspaces), each running
+its own dev script from its own directory. The agent can then start or stop individual
+services, wire "API before web" ordering with `add_task` dependencies, give each service
+its own health probe, and see which detected port belongs to which service.
+
+It is off by default. Turn it on under Settings → MCP server, copy the client config it
+shows, and drop that into your agent's MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "devharbor": {
+      "type": "http",
+      "url": "http://127.0.0.1:6872/mcp",
+      "headers": { "Authorization": "Bearer <token from Settings>" }
+    }
+  }
+}
+```
+
+Security posture: binds `127.0.0.1` only (not configurable), requires a bearer token by
+default, validates `Host`/`Origin` on every request, masks secret env values in responses,
+and redacts them from log output. Optional HTTPS with a locally generated certificate for
+clients that want it. Design and full tool list in
+[`specs/07-mcp-server.md`](specs/07-mcp-server.md).
 
 ## Install
 
@@ -60,6 +104,7 @@ The `specs/` folder is the source of truth for this project. See [`specs/WORKFLO
 6. [`specs/03-features.md`](specs/03-features.md) - every feature, with acceptance criteria
 7. [`specs/04-ui.md`](specs/04-ui.md) - screens, layout, key interactions
 8. [`specs/05-roadmap.md`](specs/05-roadmap.md) - phased delivery plan
+9. [`specs/07-mcp-server.md`](specs/07-mcp-server.md) - the MCP server: tools, transport, security
 
 ## Stack (as built)
 

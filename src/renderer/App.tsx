@@ -49,8 +49,11 @@ export function App(): JSX.Element {
   // Apply persisted theme to <html>.
   useTheme();
 
-  useEffect(() => {
-    void (async () => {
+  // Re-sync the cached view (apps + running snapshot + tasks) from the main process. Used on
+  // cold boot (resetView: land on Dashboard) and on `state:invalidate` from MCP mutations
+  // (resetView false: keep the user where they are).
+  const syncAll = useCallback(
+    async (resetView: boolean): Promise<void> => {
       const [list, running, runningTasks] = await Promise.all([
         window.api.invoke('apps:list', undefined),
         window.api.invoke('proc:list', undefined),
@@ -59,21 +62,36 @@ export function App(): JSX.Element {
       setApps(list);
       setRunningApps(running);
       setRunningTasks(runningTasks);
-      // Pre-load tasks for every registered app so the Dashboard knows their task counts +
-      // port chips without waiting for the user to open each AppDetail. One tasks:listAll
-      // round-trip instead of the old per-app N+1 loop (IMPROVEMENT-PLAN 9.7).
+      // Pre-load tasks for every app so the Dashboard has task counts + port chips without a
+      // per-app N+1 (IMPROVEMENT-PLAN 9.7). Skip the app whose task editor is open: its
+      // drawer holds optimistic edits behind a debounced save, and a snapshot taken before
+      // that save flushes would revert the inputs mid-typing.
       try {
         const all = await window.api.invoke('tasks:listAll', undefined);
+        const locked = useStore.getState().taskEditLockAppId;
         for (const a of list) {
+          if (a.id === locked) continue;
           useStore.getState().setTasksForApp(a.id, all[a.id] ?? []);
         }
       } catch {
         // best-effort
       }
-      // Always land on Dashboard on cold boot / Cmd+R reload. App detail is
-      // reached by clicking an app in the sidebar.
-      setView('dashboard');
-    })();
+      if (resetView) setView('dashboard');
+    },
+    [setApps, setRunningApps, setRunningTasks, setView]
+  );
+
+  useEffect(() => {
+    void syncAll(true);
+
+    // The MCP server (or any non-renderer path) can add/update/remove/start/stop apps; it
+    // fires `state:invalidate` so the desktop reflects those changes without a manual reload.
+    // Debounced to coalesce a burst of agent calls, and it never resets the current view.
+    let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
+    const offInvalidate = window.api.on('state:invalidate', () => {
+      if (invalidateTimer) clearTimeout(invalidateTimer);
+      invalidateTimer = setTimeout(() => void syncAll(false), 200);
+    });
 
     const offTaskStatus = window.api.on(
       'task:status',
@@ -128,6 +146,8 @@ export function App(): JSX.Element {
       void window.api.invoke('logs:openFolder', undefined);
     });
     return () => {
+      if (invalidateTimer) clearTimeout(invalidateTimer);
+      offInvalidate();
       offTaskStatus();
       offAppStatus();
       offStats();
@@ -143,10 +163,7 @@ export function App(): JSX.Element {
       offMenuOpenLogs();
     };
   }, [
-    setApps,
-    setRunningApps,
-    setRunningTasks,
-    setView,
+    syncAll,
     setSelected,
     applyAppStatus,
     applyTaskStatus,

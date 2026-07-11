@@ -105,6 +105,11 @@ Why now (not later): Phase 2 is logs polish (xterm addons, ring buffer, run hist
 - Download DMG → drag to Applications → first launch passes Gatekeeper with no warnings.
 - App auto-updates from v0.1.0 → v0.1.1 with no user intervention beyond a quit & relaunch.
 
+## Post-v1, shipped
+
+- **MCP server (F22)** - opt-in localhost HTTP server exposing DevHarbor to coding agents.
+  See [`07-mcp-server.md`](07-mcp-server.md).
+
 ## Stretch - post-v1
 
 Tracked but not in v1 scope:

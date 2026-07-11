@@ -61,6 +61,13 @@ interface State {
   // Pending env-file-change banners, keyed by appId. Most recent first.
   envFileChanges: Record<string, EnvFileChange[]>;
 
+  // While the task editor drawer is open for an app, background resyncs
+  // (`state:invalidate` after an MCP mutation) skip that app's task list so a
+  // snapshot taken before the editor's debounced save flushes can't revert the
+  // fields mid-typing. The editor keeps its own list fresh from save responses.
+  taskEditLockAppId: AppId | null;
+  setTaskEditLock: (appId: AppId | null) => void;
+
   setApps: (apps: App[]) => void;
   upsertApp: (app: App) => void;
   removeApp: (id: AppId) => void;
@@ -116,12 +123,36 @@ export const useStore = create<State>((set) => ({
 
   envFileChanges: {},
 
+  taskEditLockAppId: null,
+  setTaskEditLock: (appId) => set({ taskEditLockAppId: appId }),
+
   setApps: (apps) =>
-    set((s) => ({
-      apps,
-      loaded: true,
-      selectedAppId: s.selectedAppId ?? apps[0]?.id ?? null
-    })),
+    set((s) => {
+      const alive = new Set<string>(apps.map((a) => a.id));
+      const selectionAlive = s.selectedAppId != null && alive.has(s.selectedAppId);
+      const out: Partial<State> = {
+        apps,
+        loaded: true,
+        selectedAppId: selectionAlive ? s.selectedAppId : apps[0]?.id ?? null
+      };
+      // The selected app can vanish underneath us (an MCP client called remove_app while
+      // the user was viewing it). Reselect like the renderer's own remove path does, and
+      // land on the dashboard instead of stranding the user on the add-an-app screen.
+      if (s.selectedAppId != null && !selectionAlive && s.view === 'app') {
+        out.view = 'dashboard';
+      }
+      // Drop per-app task state for apps that no longer exist. Only rebuild the maps when
+      // something actually died, so the common no-change resync keeps stable references.
+      if (Object.keys(s.tasksByApp).some((id) => !alive.has(id))) {
+        out.tasksByApp = Object.fromEntries(
+          Object.entries(s.tasksByApp).filter(([id]) => alive.has(id))
+        );
+        out.selectedTaskByApp = Object.fromEntries(
+          Object.entries(s.selectedTaskByApp).filter(([id]) => alive.has(id))
+        );
+      }
+      return out;
+    }),
 
   upsertApp: (app) =>
     set((s) => {
@@ -162,13 +193,19 @@ export const useStore = create<State>((set) => ({
   },
 
   setTasksForApp: (appId, tasks) =>
-    set((s) => ({
-      tasksByApp: { ...s.tasksByApp, [appId]: tasks },
-      selectedTaskByApp: {
-        ...s.selectedTaskByApp,
-        [appId]: s.selectedTaskByApp[appId] ?? tasks[0]?.id ?? null
-      }
-    })),
+    set((s) => {
+      // Keep the selected tab only if that task still exists - it can vanish underneath
+      // us (MCP remove_task) and a dangling selection renders an empty task pane.
+      const cur = s.selectedTaskByApp[appId];
+      const curAlive = cur != null && tasks.some((t) => t.id === cur);
+      return {
+        tasksByApp: { ...s.tasksByApp, [appId]: tasks },
+        selectedTaskByApp: {
+          ...s.selectedTaskByApp,
+          [appId]: curAlive ? cur : tasks[0]?.id ?? null
+        }
+      };
+    }),
 
   upsertTask: (task) =>
     set((s) => {
@@ -232,14 +269,20 @@ export const useStore = create<State>((set) => ({
     }),
 
   setRunningTasks: (list) =>
-    set(() => {
-      const runningTasks: Record<string, RunningTask> = {};
-      const taskState: Record<string, ProcessState> = {};
-      const taskReady: Record<string, boolean> = {};
-      const taskCpu: Record<string, number> = {};
-      const taskMemMB: Record<string, number> = {};
-      const taskPorts: Record<string, number[]> = {};
-      // Hydrate ALL per-task derived state from the IPC snapshot. Critical: the
+    set((s) => {
+      // Merge, never replace. This runs mid-session too (`state:invalidate` after an MCP
+      // mutation), and the snapshot only contains LIVE tasks - main reaps exited ones
+      // after ~1.5s. A wholesale replace would wipe the event-driven terminal state
+      // (crashed dot, crash pin, one-shot "completed" accent) or an optimistic 'starting'
+      // record that raced the snapshot. Entries absent from the snapshot keep their last
+      // event-driven values; `applyTaskStatus` already handles every live transition.
+      const runningTasks = { ...s.runningTasks };
+      const taskState = { ...s.taskState };
+      const taskReady = { ...s.taskReady };
+      const taskCpu = { ...s.taskCpu };
+      const taskMemMB = { ...s.taskMemMB };
+      const taskPorts = { ...s.taskPorts };
+      // Hydrate ALL per-task derived state for tasks in the IPC snapshot. Critical: the
       // `task:ports` event only fires when the port set CHANGES, so on a renderer
       // refresh (Cmd+R) we'd otherwise have empty `taskPorts` for already-running
       // tasks until they happen to discover a new port.

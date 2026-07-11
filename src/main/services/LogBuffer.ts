@@ -87,6 +87,15 @@ export class LogBuffer {
     return buf.chunks.join('');
   }
 
+  /**
+   * Task ids that currently have a buffer - includes recently-exited tasks whose output is
+   * still retained (up to ~10 min). Enumerating here (rather than reading every task's
+   * buffer) lets a global search cover exited tasks without skewing LRU by touching them.
+   */
+  bufferedTaskIds(): TaskId[] {
+    return [...this.buffers.keys()];
+  }
+
   tail(taskId: TaskId, maxLines = 200): string {
     const buf = this.buffers.get(taskId);
     if (!buf) return '';

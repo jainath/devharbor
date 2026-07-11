@@ -235,6 +235,7 @@ export type ReadinessSignal =
   | { kind: 'none' }
   | { kind: 'port'; port: number; host?: string }
   | { kind: 'log'; regex: string; flags?: string }
+  | { kind: 'http'; url: string; status?: number } // ready when GET url returns status (default 2xx/3xx)
   | { kind: 'exit'; code?: number }
   | { kind: 'delay'; ms: number };
 
@@ -267,6 +268,10 @@ export interface RunningTask {
   pid: number;
   state: ProcessState;     // task-level state
   ready: boolean;          // has the readiness signal fired?
+  readinessKind: ReadinessSignal['kind']; // which probe fired it - lets consumers (MCP
+                           // honesty reporting) tell a verified ready from the vacuous
+                           // ready of a 'none' task, even if the stored config was
+                           // edited after start
   startedAt: number;
   command: string;
   nodeVersion: string;

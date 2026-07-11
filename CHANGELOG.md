@@ -4,7 +4,47 @@ All notable changes to DevHarbor are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-07-11
+
+### Added
+- **MCP server (F22)** - an opt-in, localhost-only HTTP server that exposes DevHarbor to MCP
+  clients (coding agents), so an assistant can manage your dev servers through DevHarbor
+  rather than running them in its own shell. 22 tools cover listing, adding, updating, and
+  removing apps; adding and removing tasks; starting, stopping, and restarting apps and
+  individual tasks; reading and searching logs; inspecting ports, run history, and Node
+  versions; reading and setting env vars; scanning a folder for projects; and configuring
+  readiness probes. Off by default. When on, it binds
+  `127.0.0.1` only, validates the `Host`/`Origin` on every request, and requires a bearer
+  token by default. Stored secret env values are masked in env responses and redacted from
+  log output. Configure it under Settings -> MCP server (enable, port, token, and
+  copy-paste client config). See `specs/07-mcp-server.md`.
+- **Monorepos over MCP** - `add_app` accepts `workspaceTasks: true` to register a monorepo
+  once with one task per workspace package (pnpm/yarn/npm workspaces, same detection as the
+  UI), each running its own dev script from its own directory; registering a monorepo
+  without the flag returns the detected packages and says how to get per-service tasks.
+  New `add_task` and `remove_task` tools let an agent shape the task set itself: per-task
+  working directory, `dependsOn` ordering (migrate, then api, then web), and `oneShot` for
+  run-to-completion tasks (defaults to exit-code readiness so dependents wait).
+- **MCP over HTTPS** - optional TLS for the MCP server using a self-signed localhost
+  certificate that DevHarbor generates on first use (Settings -> MCP server -> Use HTTPS;
+  the certificate path is shown for client trust, e.g. `NODE_EXTRA_CA_CERTS`).
+- **Honest readiness over MCP** - a task with no readiness probe reports `ready: null`
+  (unknown) instead of a vacuous `true`; a factual `listening` flag says whether ports are
+  open, separate from verified `ready`; start results carry `readinessVerified` plus the
+  task's recent output, wait for the port set to stabilize so slow-binding siblings in a
+  monorepo are captured inline, and label every port with the process that owns it. The new
+  `set_readiness` tool lets an agent configure a port/log/http/delay probe so
+  `readinessVerified` becomes achievable for slow-booting services.
+- **HTTP readiness probes** - a new readiness kind polls a `/health` or `/ready` URL until
+  it returns success, so a service that opens its port before its database/cache connect is
+  reported ready only when it can actually serve. Configurable in the task editor and, over
+  MCP, via `set_readiness`.
+- **Live UI updates from MCP** - when the MCP server adds, updates, removes, starts, or stops
+  an app, the desktop reflects it immediately (previously it needed a manual reload).
+
+### Changed
+- Softened the "auth off" note in Settings -> MCP server: it is now an informational note
+  sized to a single-user desktop, not a red danger banner.
 
 ## [1.1.0] - 2026-06-14
 
@@ -117,7 +157,7 @@ First public preview. macOS-only (Apple Silicon).
 - Dashboard control room, folder organization, and a ⌘K command palette.
 - Local-only storage (SQLite). No accounts, no telemetry.
 
-[Unreleased]: https://github.com/jainath/devharbor/compare/v1.1.0...HEAD
+[1.2.0]: https://github.com/jainath/devharbor/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/jainath/devharbor/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/jainath/devharbor/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jainath/devharbor/compare/v0.1.0...v1.0.0

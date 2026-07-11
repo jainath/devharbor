@@ -20,6 +20,7 @@ export interface ReadinessHandle {
 import { makeNoneWatcher } from './NoneReadiness';
 import { makePortWatcher } from './PortReadiness';
 import { makeLogWatcher } from './LogReadiness';
+import { makeHttpWatcher } from './HttpReadiness';
 import { makeExitWatcher } from './ExitReadiness';
 import { makeDelayWatcher } from './DelayReadiness';
 
@@ -34,6 +35,8 @@ export function createReadinessWatcher(
       return makePortWatcher(signal.port, handle);
     case 'log':
       return makeLogWatcher(signal.regex, signal.flags, handle);
+    case 'http':
+      return makeHttpWatcher(signal.url, signal.status, handle);
     case 'exit':
       return makeExitWatcher(signal.code ?? 0, handle);
     case 'delay':

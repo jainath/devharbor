@@ -266,6 +266,12 @@ app.on('before-quit', (event) => {
   }
   const running = ipcRuntime?.runningTaskCount() ?? 0;
   if (running === 0) {
+    // No live tasks - but an in-flight MCP start_app could still be queued (not yet at
+    // runner.start(), so it counts as 0). Flag the orchestrator so any such queued start
+    // no-ops instead of spawning an orphan after we quit. Then close the MCP listener
+    // best-effort (fire-and-forget - the socket also closes when the process exits) and go.
+    ipcRuntime?.beginShutdown();
+    void ipcRuntime?.disposeServices();
     closeDb();
     return;
   }
@@ -284,6 +290,13 @@ app.on('before-quit', (event) => {
     if (response !== 0) {
       teardownInFlight = false;
       return; // cancelled - stay open
+    }
+    // Close the MCP listener FIRST - before stopAllRunning - so no in-flight tool call can
+    // spawn a task that misses the teardown snapshot and survives as an orphan.
+    try {
+      await ipcRuntime?.disposeServices();
+    } catch (e) {
+      logger.error('service dispose on quit failed', e);
     }
     try {
       await ipcRuntime?.stopAllRunning();

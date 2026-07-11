@@ -173,6 +173,13 @@ export type InvokeChannels = {
   'node:resolve': { req: { id: AppId }; res: NodeInstallation };
 
   'dialog:browse': { req: void; res: string | null };
+
+  // MCP server (F22): status snapshot + token management for the Settings UI.
+  'mcp:status': { req: void; res: McpStatus };
+  /** Plaintext token for display/copy. Null when none has been generated yet. */
+  'mcp:token': { req: void; res: string | null };
+  /** Rotate the token. The old token stops working on the next request. */
+  'mcp:regenerateToken': { req: void; res: string };
 };
 
 export type EventChannels = {
@@ -256,6 +263,16 @@ export type EventChannels = {
   'menu:checkUpdates': Record<string, never>;
   /** Help → Open Logs Folder - renderer invokes logs:openFolder. */
   'menu:openLogs': Record<string, never>;
+
+  /** MCP server started/stopped/errored or its settings changed. */
+  'mcp:statusChanged': McpStatus;
+
+  /**
+   * A non-renderer path (the MCP server) mutated app/task/env/lifecycle state, so the
+   * renderer's cached view is stale. The renderer re-syncs (apps + running + tasks) on this,
+   * debounced. Renderer-initiated changes update the store directly and do not need it.
+   */
+  'state:invalidate': Record<string, never>;
 };
 
 export interface EnvFileInfo {
@@ -292,6 +309,32 @@ export interface SettingsState {
   run_history_limit: number;
   /** Abort a task's start if its readiness signal hasn't fired within this many ms. */
   readiness_timeout_ms: number;
+  /** Run the local MCP server so coding agents can manage apps through DevHarbor. */
+  mcp_enabled: boolean;
+  /** MCP server listen port (loopback only). */
+  mcp_port: number;
+  /** Require the bearer token on every MCP request. Off = any local process can connect. */
+  mcp_require_auth: boolean;
+  /** Serve MCP over TLS using a self-signed localhost certificate. */
+  mcp_https: boolean;
+}
+
+/** Live state of the MCP server, for the Settings UI. */
+export interface McpStatus {
+  enabled: boolean;
+  running: boolean;
+  port: number;
+  /** Endpoint URL while running, else null. */
+  url: string | null;
+  requireAuth: boolean;
+  /** Serving over TLS. */
+  https: boolean;
+  /** Path to the self-signed certificate clients must trust; null while HTTPS is off. */
+  certPath: string | null;
+  /** Why the server is not running despite being enabled (e.g. port in use), else null. */
+  lastError: string | null;
+  /** True when the OS keychain was unavailable and the token had to be stored unencrypted. */
+  tokenStoredPlaintext: boolean;
 }
 
 export type InvokeChannelName = keyof InvokeChannels;
@@ -360,7 +403,10 @@ const INVOKE_CHANNEL_FLAGS = {
   'folders:clear': true,
   'node:list': true,
   'node:resolve': true,
-  'dialog:browse': true
+  'dialog:browse': true,
+  'mcp:status': true,
+  'mcp:token': true,
+  'mcp:regenerateToken': true
 } satisfies Record<InvokeChannelName, true>;
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE_CHANNEL_FLAGS) as InvokeChannelName[];
@@ -384,7 +430,9 @@ const EVENT_CHANNEL_FLAGS = {
   'menu:addApp': true,
   'menu:newFolder': true,
   'menu:checkUpdates': true,
-  'menu:openLogs': true
+  'menu:openLogs': true,
+  'mcp:statusChanged': true,
+  'state:invalidate': true
 } satisfies Record<EventChannelName, true>;
 
 export const EVENT_CHANNELS = Object.keys(EVENT_CHANNEL_FLAGS) as EventChannelName[];

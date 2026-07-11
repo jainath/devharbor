@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import type { DetectionResult, WorkspaceCandidate } from '@shared/types';
 import { PMDetector } from './PMDetector';
 import { NodeResolver } from './NodeResolver';
@@ -58,6 +58,11 @@ export class DetectionService {
     }
     const out: WorkspaceCandidate[] = [];
     for (const dir of dirs) {
+      // Workspace globs can point outside the repo (`packages: ['../*']`). Never offer a
+      // candidate outside the root: a task created from it would run some unrelated
+      // sibling project's scripts under this app's name.
+      const rel = relative(root, dir);
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) continue;
       const pkgPath = join(dir, 'package.json');
       if (!existsSync(pkgPath)) continue;
       try {
@@ -68,8 +73,8 @@ export class DetectionService {
             : [];
         if (scriptNames.length === 0) continue;
         out.push({
-          name: typeof data?.name === 'string' ? data.name : relative(root, dir),
-          relPath: relative(root, dir),
+          name: typeof data?.name === 'string' ? data.name : rel,
+          relPath: rel,
           scripts: scriptNames,
           suggestedScript: pickSuggested(scriptNames)
         });

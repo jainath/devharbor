@@ -137,6 +137,30 @@ export function EnvEditor({
     void refreshTask();
   }, [refreshTask]);
 
+  // An MCP client can change env vars while this editor is open (set_env_var), and
+  // saving a scope writes the FULL row list back (replace semantics) - a stale panel
+  // would silently delete the agent's rows on the next Save. On invalidate, refresh
+  // every scope the user has NOT edited; a dirty scope keeps its in-progress edits
+  // (same trade-off as the .env disk-change banner). Read dirtiness through a ref so
+  // keystrokes don't churn the subscription.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useEffect(() => {
+    let timer: number | null = null;
+    const off = window.api.on('state:invalidate', () => {
+      if (timer != null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (!dirtyRef.current.global) void refreshGlobal();
+        if (!dirtyRef.current.app) void refreshApp();
+        if (!dirtyRef.current.task) void refreshTask();
+      }, 200);
+    });
+    return () => {
+      if (timer != null) window.clearTimeout(timer);
+      off();
+    };
+  }, [refreshGlobal, refreshApp, refreshTask]);
+
   const activeTask = tasks.find((t) => t.id === activeTaskId) ?? null;
 
   const current = tab === 'app' ? appVars : tab === 'global' ? globalVars : taskVars;

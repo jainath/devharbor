@@ -20,6 +20,18 @@ const TASK_EDITOR_TITLE_ID = 'task-editor-title';
 
 const EMPTY_TASKS: Task[] = [];
 
+// Two edits queued within one debounce window must UNION their patches. A plain shallow
+// merge of the wrapper object would let a later { patch: { name } } replace an earlier
+// { patch: { readiness } } wholesale, silently dropping the first field.
+function mergeTaskSaves(
+  pending: { id: TaskId; patch: Partial<Task> },
+  next: { id: TaskId; patch: Partial<Task> }
+): { id: TaskId; patch: Partial<Task> } {
+  return pending.id === next.id
+    ? { id: next.id, patch: { ...pending.patch, ...next.patch } }
+    : next;
+}
+
 export function TaskEditor({
   appId,
   appPath,
@@ -32,6 +44,23 @@ export function TaskEditor({
   const tasks = useStore((s) => s.tasksByApp[appId] ?? EMPTY_TASKS);
   const upsertTask = useStore((s) => s.upsertTask);
   const removeTask = useStore((s) => s.removeTask);
+  const setTaskEditLock = useStore((s) => s.setTaskEditLock);
+
+  // While this drawer is open, background resyncs (state:invalidate after an MCP
+  // mutation) skip this app's task list - a snapshot taken before the debounced save
+  // below flushes would revert the inputs mid-typing. Save responses keep it fresh.
+  // On close, refetch once so anything an MCP client changed meanwhile lands (the
+  // skipped resyncs will not fire again on their own).
+  useEffect(() => {
+    setTaskEditLock(appId);
+    return () => {
+      setTaskEditLock(null);
+      void window.api
+        .invoke('tasks:list', { appId })
+        .then((ts) => useStore.getState().setTasksForApp(appId, ts))
+        .catch(() => {});
+    };
+  }, [appId, setTaskEditLock]);
   const [editingId, setEditingId] = useState<TaskId | null>(tasks[0]?.id ?? null);
   const [error, setError] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectionResult | null>(null);
@@ -78,7 +107,7 @@ export function TaskEditor({
     } catch (e) {
       setError((e as Error).message);
     }
-  }, 300);
+  }, 300, mergeTaskSaves);
 
   // If the user switches the edited task before pending changes flush, save them first.
   useEffect(() => {
@@ -259,7 +288,16 @@ function TaskForm({
   onChange: (patch: Partial<Task>) => void;
   onRemove: () => void;
 }): JSX.Element {
-  const scriptChoices = useMemo(() => Object.keys(detection?.scripts ?? {}), [detection]);
+  const scriptChoices = useMemo(() => {
+    const keys = Object.keys(detection?.scripts ?? {});
+    // A workspace task's script lives in the workspace package's own package.json, not
+    // the root one this detection covers - keep the saved value selectable instead of
+    // rendering the dropdown blank.
+    if (task.commandKind === 'script' && task.script && !keys.includes(task.script)) {
+      keys.unshift(task.script);
+    }
+    return keys;
+  }, [detection, task.commandKind, task.script]);
   const isOneShot = task.oneShot;
 
   const setReadinessKind = (kind: ReadinessSignal['kind']): void => {
@@ -273,6 +311,9 @@ function TaskForm({
         break;
       case 'log':
         next = { kind: 'log', regex: 'ready' };
+        break;
+      case 'http':
+        next = { kind: 'http', url: 'http://localhost:3000/health' };
         break;
       case 'exit':
         next = { kind: 'exit', code: 0 };
@@ -393,7 +434,7 @@ function TaskForm({
       <Field label="Readiness signal">
         <div className="space-y-2">
           <div className="flex flex-wrap gap-1.5">
-            {(['none', 'port', 'log', 'exit', 'delay'] as const).map((k) => (
+            {(['none', 'port', 'log', 'http', 'exit', 'delay'] as const).map((k) => (
               <RadioPill
                 key={k}
                 checked={task.readiness.kind === k}
@@ -423,6 +464,22 @@ function TaskForm({
                 })
               }
               placeholder="ready"
+              className="w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg"
+            />
+          )}
+          {task.readiness.kind === 'http' && (
+            <input
+              value={task.readiness.url}
+              onChange={(e) =>
+                void onChange({
+                  readiness: {
+                    kind: 'http',
+                    url: e.target.value,
+                    status: task.readiness.kind === 'http' ? task.readiness.status : undefined
+                  }
+                })
+              }
+              placeholder="http://localhost:3000/health"
               className="w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg"
             />
           )}
@@ -538,6 +595,8 @@ function readinessLabel(r: ReadinessSignal): string {
       return `:${r.port}`;
     case 'log':
       return 'log';
+    case 'http':
+      return 'http';
     case 'exit':
       return r.code === undefined || r.code === 0 ? '✓' : `exit ${r.code}`;
     case 'delay':

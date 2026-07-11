@@ -3,14 +3,17 @@ import { useCallback, useEffect, useRef } from 'react';
 /**
  * Coalesce a stream of partial saves into one debounced call.
  *
- * - Calls accumulate via Object.assign (shallow merge).
+ * - Calls accumulate via Object.assign (shallow merge). Pass `merge` when the payload
+ *   nests the actual patch (e.g. { id, patch }) - a shallow merge would replace the
+ *   whole nested object and drop fields queued earlier in the same window.
  * - The save function fires `delay` ms after the last call.
  * - Pending changes are flushed on unmount.
  * - Returned `flush()` lets the caller force an immediate save (e.g. before switching contexts).
  */
 export function useDebouncedSave<P extends object>(
   save: (patch: P) => Promise<void> | void,
-  delay = 300
+  delay = 300,
+  merge?: (pending: P, next: P) => P
 ): { queue: (patch: P) => void; flush: () => void } {
   const pendingRef = useRef<P>({} as P);
   const timerRef = useRef<number | null>(null);
@@ -32,11 +35,15 @@ export function useDebouncedSave<P extends object>(
 
   const queue = useCallback(
     (patch: P): void => {
-      Object.assign(pendingRef.current as object, patch);
+      if (merge && Object.keys(pendingRef.current as object).length > 0) {
+        pendingRef.current = merge(pendingRef.current, patch);
+      } else {
+        Object.assign(pendingRef.current as object, patch);
+      }
       if (timerRef.current != null) window.clearTimeout(timerRef.current);
       timerRef.current = window.setTimeout(flush, delay);
     },
-    [flush, delay]
+    [flush, delay, merge]
   );
 
   useEffect(() => {
