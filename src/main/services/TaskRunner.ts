@@ -441,7 +441,7 @@ export class TaskRunner extends EventEmitter {
     const grace = this.settings?.get('kill_grace_ms') ?? DEFAULT_KILL_GRACE_MS;
 
     // Graceful: signal the WHOLE process tree, not just the PTY child. For `npm run dev`
-    // the real server is a grandchild, and a non-interactive `$SHELL -l -c` wrapper does not
+    // the real server is a grandchild, and a non-interactive `$SHELL -c` wrapper does not
     // forward SIGTERM - so signalling only the pty child usually skips graceful shutdown
     // (IMPROVEMENT-PLAN 7.1).
     //
@@ -586,8 +586,12 @@ function buildCommand(args: {
   if (args.kind === 'custom') {
     const cmd = args.customCommand;
     if (!cmd) throw new Error('Custom task has no command.');
+    // Non-login on purpose: EnvBuilder already computed PATH (selected Node bin dir first, then
+    // PathProbe's login-shell PATH). A login shell re-runs the profile, and on macOS
+    // /etc/zprofile's path_helper moves /usr/local/bin etc. ahead of it - so `node` / `pnpm`
+    // resolved outside the selected version while the same script task was fine.
     const shell = process.env.SHELL || '/bin/sh';
-    return { file: shell, args: ['-l', '-c', cmd], commandStr: cmd };
+    return { file: shell, args: ['-c', cmd], commandStr: cmd };
   }
   const script = args.script;
   if (!script) throw new Error('Script task has no script name.');
