@@ -100,6 +100,7 @@ These are real and worth fixing; tracked here so they don't get lost. **Phase 6 
 
 - **DevTools auto-opens in dev** - intentional, but ungated. Add a setting in Phase 6 if there's time.
 - **Orchestrator can't await readiness on a task the user started manually** - if the user clicks Start on a single task and then starts the whole App, the orchestrator skips waiting on that task's readiness. Acceptable for v1.
+- **Custom tasks still run the shell's always-sourced startup file** - `$SHELL -c` skips the login profile, but zsh still reads `~/.zshenv` and fish reads `config.fish`; a PATH edit there can still shadow the selected Node for custom tasks (script tasks are unaffected).
 
 ### Phase 6 audit close-out (all ✅ unless noted)
 
@@ -195,6 +196,8 @@ All findings from the post-Phase-5 audit:
   - **Observability/infra:** local file logger (`~/Library/Logs/DevHarbor`) + uncaughtException/unhandledRejection + renderer `render-process-gone` auto-reload; ErrorBoundary; window bounds persisted; **CI workflow** (typecheck + lint + test on PR/push), **ESLint flat config + Prettier**, release workflow bumped to Node-24-native action majors + tag-match publish guard.
   - **New features:** menubar **Tray** (aggregate state + per-app start/stop + Stop all), **crash/ready notifications**, **launch-at-login + per-app auto-start** (`0007`), **start/stop all in folder**, **bulk import** (scan a folder of repos), **global log search** (⌘⇧F), **port-conflict** callout in CrashPin, update **release notes** + error surfacing in the banner.
   - Verification: typecheck + lint (83 files, 0 warnings) + 52 tests (incl. new restart-watcher and double-start-race coverage) + production build all green; all 7 migrations validated against a real SQLite DB.
+
+- **2026-09-24** - Custom Shell tasks ran the wrong Node. A custom `pnpm dev` failed with "pnpm requires at least Node.js v18.12 / current is v16.18.0" while the same `dev` script task used the selected nvm version. Root cause: `TaskRunner.buildCommand` wrapped custom commands in `$SHELL -l -c`; the login profile's `path_helper` (`/etc/zprofile`) moved `/usr/local/bin` (holding a system Node 16) ahead of the Node bin dir `EnvBuilder` had put first. Custom commands now run via `$SHELL -c` and get the layered env unchanged. Regression test `TaskRunner.nodeEnv.test.ts` (real TaskRunner + EnvBuilder + pty + `/bin/zsh`) asserts script and custom tasks resolve the same `node`.
 
 ## How to keep this file honest
 

@@ -79,7 +79,7 @@ Each feature has: a one-line summary, behaviour, edge cases, and acceptance crit
   - pnpm: `pnpm run <script>` or `pnpm <script>`
   - bun: `bun run <script>`
 - Bun is supported only if a `bun` binary is on PATH; otherwise show a warning at detection time.
-- Custom command override: user can write any shell line (e.g. `npx tsx watch src/server.ts`); we still use the PTY and the layered env.
+- Custom command override: user can write any shell line (e.g. `npx tsx watch src/server.ts`); we still use the PTY and the layered env. The line runs in the user's `$SHELL` as a **non-login** shell (`$SHELL -c`), so profile scripts can't reorder the computed PATH (macOS `path_helper` in `/etc/zprofile` would move `/usr/local/bin` ahead of the selected Node) - a custom `pnpm dev` resolves the same Node as the `dev` script task.
 
 **Acceptance.**
 - pnpm-lock.yaml present → pnpm. yarn.lock → yarn. package-lock.json → npm. None → ask once, remember.

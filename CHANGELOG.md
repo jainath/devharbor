@@ -4,6 +4,16 @@ All notable changes to DevHarbor are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Custom Shell tasks use the app's selected Node version** - a custom command such as
+  `pnpm dev` could run with a different Node than the same `dev` script task (e.g. a system
+  Node 16 in `/usr/local/bin` instead of the nvm version picked for the app), because it ran
+  in a login shell whose profile reordered `PATH`. Custom commands now run in a non-login
+  shell with the same environment as script tasks. Note: variables exported only in
+  `~/.zprofile` / `~/.zlogin` no longer reach custom tasks - set them in DevHarbor's env vars.
+
 ## [1.2.0] - 2026-07-11
 
 ### Added
